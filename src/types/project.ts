@@ -25,29 +25,11 @@ export type LyricBlockStyle = {
   backgroundBox?: { enabled: boolean; color: string; opacity: number; padding: number; radius: number };
 };
 
-export type LyricAnimationIn =
-  | "fade"
-  | "pop"
-  | "slideUp"
-  | "slideDown"
-  | "slideLeft"
-  | "slideRight"
-  | "zoom"
-  | "typewriter"
-  | "bounce"
-  | "glitch"
-  | "kinetic"
-  | "none";
+/** Any animation preset ID from ANIMATION_PRESETS, or a legacy camelCase name, or "none". */
+export type LyricAnimationIn = string;
 
-export type LyricAnimationOut =
-  | "fade"
-  | "pop"
-  | "slideUp"
-  | "slideDown"
-  | "slideLeft"
-  | "slideRight"
-  | "zoom"
-  | "none";
+/** Any animation preset ID from ANIMATION_PRESETS, or a legacy camelCase name, or "none". */
+export type LyricAnimationOut = string;
 
 export type LyricAnimation = {
   in: LyricAnimationIn;
