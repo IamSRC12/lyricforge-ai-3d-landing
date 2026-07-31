@@ -32,6 +32,48 @@ export const MULTI_LANG_STRUCTURAL_KEYWORDS: string[] = [
   "kuplet", "kuple", "band", "kiriş", "kiris", "chiqish", "nakorat", "tashqi", "boshlanishi", "tugashi",
   "naqarot", "naqorot", "naqorat", "naqoroat",
 
+  // Vietnamese
+  "lời", "điệp khúc", "nhạc dạo", "phần", "đoạn", "giới thiệu", "kết thúc",
+
+  // Tagalog / Filipino
+  "berso", "koro", "tulay", "panimula",
+
+  // Polish
+  "zwrotka", "refren", "mostek", "wstęp", "wstep", "zakończenie",
+
+  // Dutch
+  "coupleto", "refrein", "brug", "inleiding", "slot",
+
+  // Swedish
+  "vers", "refräng", "brygga",
+
+  // Greek
+  "κουπλέ", "ρεφρέν", "γέφυρα", "εισαγωγή", "εξαγωγή",
+
+  // Persian
+  "همخوان", "بند", "پل", "مقدمه",
+
+  // Hebrew
+  "בית", "פזמون", "מעבר", "פתיח",
+
+  // Finnish
+  "säkeistö", "kertosäkeistö", "silta",
+
+  // Hungarian
+  "versszak", "refrén", "átkötés", "bevezetés",
+
+  // Czech / Slovak
+  "sloka", "refrén", "můstek", "most", "úvod",
+
+  // Romanian
+  "refren", "strofă", "strofa", "punte", "introducere",
+
+  // Danish / Norwegian
+  "vers", "refreng", "bro",
+
+  // Indonesian / Malay
+  "bait", "paduan suara", "jembatan",
+
   // Metadata / Script tags
   "optional cyrillic", "optional latin", "optional", "cyrillic", "latin", "translation", "transcription",
   "metadata", "credits", "romaji", "pinyin", "kanji", "hangul", "english", "uzbek",
@@ -81,7 +123,7 @@ function isStructuralHeader(text: string): boolean {
   }
 
   // Regex pattern matching
-  const pattern = /^(intro|verse|verso|couplet|strophe|куплет|chorus|coro|refrain|припев|サビ|副歌|主歌|bridge|ponte|puente|бридж|hook|outro|interlude|solo|part|section|aメロ|bメロ|cメロ|kuplet|kuple|band|kiriş|kiris|chiqish|nakorat|tashqi|boshlanishi|tugashi|naqarot|naqorot|naqorat|заспів|приспів|вступ|кінець)\s*[:\-–—]?\s*\d*[a-c]?$/i;
+  const pattern = /^(intro|verse|verso|couplet|strophe|куплет|chorus|coro|refrain|припев|サビ|副歌|主歌|bridge|ponte|puente|бридж|hook|outro|interlude|solo|part|section|aメロ|bメロ|cメロ|kuplet|kuple|band|kiriş|kiris|chiqish|nakorat|tashqi|boshlanishi|tugashi|naqarot|naqorot|naqorat|заспів|приспів|вступ|кінець|zwrotka|refren|mostek|wstęp|wstep|zakończenie|coupleto|brug|inleiding|slot|refräng|brygga|κουπλέ|ρεφρέν|γέφυρα|εισαγωγή|εξαγωγή|همخوان|بند|پل|مقدمه|בית|פזמون|معבר|פתיח|säkeistö|kertosäkeistö|silta|versszak|átkötés|bevezetés|sloka|můstek|most|úvod|strofă|strofa|introducere|refreng|bro|bait|paduansuara|jembatan|lời|điệpkhúc|nhạcdạo|phần|đoạn|giới thiệu|kết thúc|berso|koro|tulay|panimula)\s*[:\-–—]?\s*\d*[a-c]?$/i;
   return pattern.test(normalized);
 }
 
