@@ -276,24 +276,6 @@ export function PropertiesPanel() {
         )}
       </div>
 
-      {/* Templates */}
-      <div className="rounded-[16px] border border-white/10 bg-[#14141C] p-4">
-        <h3 className="mb-3 text-[11px] font-bold uppercase tracking-widest text-white/60">Style Templates</h3>
-        <div className="grid grid-cols-2 gap-2">
-          {TEMPLATES.map((tpl) => (
-            <button
-              key={tpl.name}
-              type="button"
-              onClick={() => applyTemplate(tpl.style)}
-              disabled={!selected}
-              className="rounded-xl border border-white/10 bg-white/[0.04] p-2 text-left hover:bg-white/[0.08] disabled:opacity-40"
-            >
-              <div className="text-[11px] font-bold text-white">{tpl.name}</div>
-              <div className="mt-1 text-[10px] text-white/40 truncate">{tpl.style.fontFamily}</div>
-            </button>
-          ))}
-        </div>
-      </div>
 
       {/* Selected block */}
       {selected ? (
@@ -721,16 +703,7 @@ export function PropertiesPanel() {
               </div>
             </div>
 
-            <div className="mt-3">
-              <label className="text-[11px] text-white/50">Custom CSS (Scoped to block)</label>
-              <textarea
-                value={selected.animation.customCSS || ""}
-                onChange={(e) => updateBlockAnimation(selected.id, { customCSS: e.target.value || null })}
-                onBlur={() => pushHistory()}
-                placeholder="@keyframes ..."
-                className="mt-1 min-h-[70px] w-full rounded-lg border border-white/10 bg-black/40 p-2 font-mono text-[11px] text-white"
-              />
-            </div>
+
           </div>
         </>
       ) : (
@@ -745,11 +718,9 @@ export function PropertiesPanel() {
         <div className="space-y-3">
           {[
             { key: "karaokeEnabled" as keyof AISettings, label: "Karaoke Word Highlight", desc: "Per-word sync using Whisper" },
-            { key: "visualizerEnabled" as keyof AISettings, label: "Audio Visualizer", desc: "Reactive bars" },
-            { key: "particlesEnabled" as keyof AISettings, label: "Particle Background", desc: "Subtle floating particles" },
-            { key: "beatPulseEnabled" as keyof AISettings, label: "Beat Pulse", desc: "Punch on word start" },
-            { key: "autoAnimateEnabled" as keyof AISettings, label: "Auto Animations", desc: "AI picks in/out" },
-            { key: "liveCssEnabled" as keyof AISettings, label: "Live CSS Animations", desc: "Inject NVIDIA NIM CSS" },
+            { key: "visualizerEnabled" as keyof AISettings, label: "Audio Visualizer", desc: "Reactive waveform bars" },
+            { key: "beatPulseEnabled" as keyof AISettings, label: "Beat Pulse", desc: "Scale punch on word start" },
+            { key: "autoAnimateEnabled" as keyof AISettings, label: "Auto Animations", desc: "AI picks in/out per segment" },
           ].map((t) => (
             <label key={t.key} className="flex items-start gap-3 rounded-xl bg-white/[0.03] p-3 hover:bg-white/[0.06] cursor-pointer">
               <input
@@ -764,6 +735,53 @@ export function PropertiesPanel() {
               </div>
             </label>
           ))}
+
+          {/* Particle Background — multi-style picker */}
+          <div className="rounded-xl bg-white/[0.03] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div>
+                <div className="text-xs font-medium text-white">Particle Background</div>
+                <div className="text-[11px] text-white/40">Choose a particle style</div>
+              </div>
+              {aiSettings.particlesEnabled && (
+                <button
+                  type="button"
+                  onClick={() => setAISettings({ particlesEnabled: false })}
+                  className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/50 hover:bg-white/20"
+                >
+                  Off
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-5 gap-1.5">
+              {([
+                { id: "dust",          label: "Dust",          icon: "·····",   colors: "from-white/20 to-white/5" },
+                { id: "stars",         label: "Stars",         icon: "✦✦✦",     colors: "from-yellow-300/30 to-indigo-400/20" },
+                { id: "rain",          label: "Rain",          icon: "│││││",   colors: "from-cyan-400/30 to-blue-500/20" },
+                { id: "fireflies",     label: "Firefly",       icon: "⬤⬤⬤",     colors: "from-lime-300/30 to-emerald-400/20" },
+                { id: "constellation", label: "Cosmo",         icon: "✦—✦",     colors: "from-violet-400/30 to-pink-400/20" },
+              ] as const).map((style) => {
+                const isActive = aiSettings.particlesEnabled && (aiSettings as any).particleStyle === style.id;
+                return (
+                  <button
+                    key={style.id}
+                    type="button"
+                    onClick={() => setAISettings({ particlesEnabled: true, particleStyle: style.id } as any)}
+                    className={`flex flex-col items-center gap-1 rounded-xl border p-2 transition ${
+                      isActive
+                        ? "border-white/50 bg-white/15"
+                        : "border-white/5 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.07]"
+                    }`}
+                  >
+                    <div className={`grid h-8 w-full place-items-center rounded-lg bg-gradient-to-br ${style.colors} text-[13px]`}>
+                      {style.icon}
+                    </div>
+                    <span className="text-[9px] text-white/50">{style.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </div>
