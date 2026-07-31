@@ -13,6 +13,13 @@ import type {
   ProjectState,
   ProjectMeta,
 } from "@/types/project";
+import {
+  assertSegmentCount,
+  revokeSegments,
+  type AudioSegment,
+  type SplitMode,
+} from "@/lib/audioSplitter";
+import { retimeBlock, r3 } from "@/lib/timeUtils";
 
 export type {
   WordTimestamp,
@@ -114,6 +121,12 @@ export function normalizeLyricBlock(block: any): LyricBlock {
     style,
     animation,
     emotion: block?.emotion ? String(block.emotion) : undefined,
+    isInstrumental: Boolean(block?.isInstrumental),
+    locked: Boolean(block?.locked),
+    confidence:
+      typeof block?.confidence === "number" && Number.isFinite(block.confidence)
+        ? block.confidence
+        : undefined,
   };
 }
 
@@ -158,6 +171,13 @@ type Actions = {
   loadProject: (data: Partial<ProjectState>) => void;
   resetProject: () => void;
   saveProjectMeta: (name: string) => void;
+  setSplitMode: (mode: SplitMode) => void;
+  setAudioSegments: (segments: AudioSegment[]) => void;
+  clearAudioSegments: () => void;
+  insertSegmentsIntoTimeline: (options?: {
+    includeInstrumentalBlocks?: boolean;
+    strict?: boolean;
+  }) => void;
 };
 
 const initialSettings: Settings = {
@@ -182,6 +202,8 @@ const initialState: ProjectState = {
   audioDuration: 0,
   audioName: null,
   audioWaveform: [],
+  audioSegments: [],
+  splitMode: "tight",
   backgroundAsset: null,
   lyricBlocks: [],
   settings: initialSettings,
@@ -431,11 +453,86 @@ export const useLyricStore = create<ProjectState & Actions>()(
         if (prevUrl && prevUrl.startsWith("blob:")) {
           try { URL.revokeObjectURL(prevUrl); } catch {}
         }
+        revokeSegments(get().audioSegments);
         set({
           ...initialState,
           settings: get().settings,
           history: [{ lyricBlocks: [], backgroundAsset: null }],
           historyIndex: 0,
+        });
+      },
+
+      setSplitMode: (mode) => set({ splitMode: mode }),
+
+      setAudioSegments: (segments) => {
+        revokeSegments(get().audioSegments);
+        set({ audioSegments: segments });
+      },
+
+      clearAudioSegments: () => {
+        revokeSegments(get().audioSegments);
+        set({ audioSegments: [] });
+      },
+
+      /**
+       * Snaps the timeline to the verified split.
+       * Uses retimeBlock(..., "trim") so word-level Whisper timings are NEVER
+       * warped — only the visible window of each block moves.
+       */
+      insertSegmentsIntoTimeline: (options = {}) => {
+        const { audioSegments, lyricBlocks, audioDuration } = get();
+        if (audioSegments.length === 0) return;
+
+        const lyricClips = audioSegments.filter((s) => !s.isInstrumental);
+        if (options.strict !== false) {
+          assertSegmentCount(audioSegments, lyricBlocks.filter((b) => !b.isInstrumental).length);
+        }
+
+        get().pushHistory();
+
+        const byId = new Map(lyricClips.filter((s) => s.blockId).map((s) => [s.blockId!, s]));
+        const next: LyricBlock[] = [];
+
+        lyricBlocks
+          .filter((b) => !b.isInstrumental)
+          .forEach((block, i) => {
+            const seg = byId.get(block.id) ?? lyricClips[i];
+            if (!seg) {
+              next.push(block);
+              return;
+            }
+            next.push(
+              normalizeLyricBlock({
+                ...block,
+                ...retimeBlock(block, seg.startTime, seg.endTime, "trim"),
+              }),
+            );
+          });
+
+        if (options.includeInstrumentalBlocks) {
+          for (const seg of audioSegments.filter((s) => s.isInstrumental)) {
+            next.push(
+              normalizeLyricBlock({
+                id: `inst_${seg.id}`,
+                text: "",
+                startTime: seg.startTime,
+                endTime: seg.endTime,
+                words: [],
+                isInstrumental: true,
+                locked: true,
+              }),
+            );
+          }
+        }
+
+        const sorted = next.sort((a, b) => a.startTime - b.startTime);
+        const lastEnd = sorted[sorted.length - 1]?.endTime ?? 0;
+
+        set({
+          lyricBlocks: sorted,
+          selectedBlockId: sorted[0]?.id ?? null,
+          currentTime: 0,
+          audioDuration: Math.max(audioDuration, r3(lastEnd)),
         });
       },
 
@@ -490,6 +587,7 @@ export const useLyricStore = create<ProjectState & Actions>()(
         resolution: state.resolution,
         fps: state.fps,
         projects: state.projects,
+        splitMode: state.splitMode,
       }),
       migrate: (persistedState: any, version: number) => {
         if (version < 2 || !persistedState) {
@@ -502,6 +600,7 @@ export const useLyricStore = create<ProjectState & Actions>()(
             aspectRatio: persistedState?.aspectRatio || "16:9",
             resolution: persistedState?.resolution || "1920x1080",
             fps: persistedState?.fps === 30 ? 30 : 60,
+            splitMode: persistedState?.splitMode || "tight",
           };
         }
         return persistedState;

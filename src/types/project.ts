@@ -261,6 +261,9 @@ export type ProjectState = {
   audioDuration: number;
   audioName: string | null;
   audioWaveform: number[];
+  /** transient — WAV blobs, never persisted */
+  audioSegments: import("@/lib/audioSplitter").AudioSegment[];
+  splitMode: import("@/lib/audioSplitter").SplitMode;
   rawLyrics: string;
   backgroundAsset: BackgroundAsset | null;
   lyricBlocks: LyricBlock[];

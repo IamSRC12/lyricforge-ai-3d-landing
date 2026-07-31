@@ -18,12 +18,14 @@ export async function transcribeWithGroq(
   apiKey: string,
   onProgress?: (msg: string) => void
 ): Promise<GroqTranscriptionResult> {
-  const cleanKey = apiKey ? apiKey.trim() : "";
-  if (!cleanKey) {
-    throw new Error("Groq API Key is missing. Please configure it in Settings or enable demo mode.");
+  if (audioFile.size > 25 * 1024 * 1024) {
+    throw new Error("File exceeds the 25 MB Groq limit.");
   }
 
-  onProgress?.("Uploading audio and requesting word timestamps...");
+  const cleanKey = apiKey ? apiKey.trim() : "";
+  const useProxy = !cleanKey;
+
+  onProgress?.(useProxy ? "Uploading audio to server proxy..." : "Uploading audio to Groq API...");
 
   const form = new FormData();
   form.append("file", audioFile);
@@ -40,11 +42,15 @@ export async function transcribeWithGroq(
   );
 
   try {
-    const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    const url = useProxy ? "/api/transcribe" : "https://api.groq.com/openai/v1/audio/transcriptions";
+    const headers: Record<string, string> = {};
+    if (!useProxy) {
+      headers["Authorization"] = `Bearer ${cleanKey}`;
+    }
+
+    const res = await fetch(url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${cleanKey}`,
-      },
+      headers,
       body: form,
       signal: controller.signal,
     });
