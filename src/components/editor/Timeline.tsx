@@ -108,6 +108,33 @@ export function Timeline() {
       }
 
       updateLyricBlock(dragging.id, newBlock);
+
+      // Auto-adjust neighboring blocks to prevent overlap
+      if (dragging.mode === "left") {
+        const sorted = [...lyricBlocks].sort((a, b) => a.startTime - b.startTime);
+        const idx = sorted.findIndex((b) => b.id === dragging.id);
+        if (idx > 0) {
+          const prev = sorted[idx - 1];
+          if (prev.endTime > newBlock.startTime) {
+            updateLyricBlock(prev.id, {
+              ...prev,
+              endTime: Math.max(prev.startTime + 0.1, newBlock.startTime),
+            });
+          }
+        }
+      } else if (dragging.mode === "right") {
+        const sorted = [...lyricBlocks].sort((a, b) => a.startTime - b.startTime);
+        const idx = sorted.findIndex((b) => b.id === dragging.id);
+        if (idx >= 0 && idx < sorted.length - 1) {
+          const next = sorted[idx + 1];
+          if (next.startTime < newBlock.endTime) {
+            updateLyricBlock(next.id, {
+              ...next,
+              startTime: Math.min(next.endTime - 0.1, newBlock.endTime),
+            });
+          }
+        }
+      }
     };
 
     const onPointerUp = () => {

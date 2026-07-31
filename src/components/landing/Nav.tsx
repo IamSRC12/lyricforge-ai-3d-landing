@@ -55,10 +55,10 @@ export default function Nav() {
             <Braces className="size-4" /> Source access
           </a>
           <a
-            href="#forge"
+            href="/studio"
             className="rounded-lg bg-gradient-to-r from-forge-primary to-forge-secondary px-4 py-2 text-sm font-medium text-white transition duration-200 hover:glow-primary hover:brightness-110"
           >
-            Start creating
+            Launch Studio →
           </a>
           <button
             type="button"
