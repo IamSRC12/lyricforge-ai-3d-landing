@@ -1,8 +1,8 @@
 ﻿================================================================================
 CODE.TXT - COMBINED SOURCE SNAPSHOT
 Project       : lyricforge-ai-3d-landing
-Generated     : 2026-07-31 21:29:21
-Total files   : 65
+Generated     : 2026-07-31 22:01:44
+Total files   : 66
 Regenerate    : .\update-code-files.ps1
 Change log    : code_log.txt
 Excluded      : node_modules, .next, .env.local (secrets),
@@ -9467,6 +9467,13 @@ FILE: src\lib\alignLyrics.ts
 import type { GroqTranscriptionResult, GroqWord } from "./groq";
 import type { LyricBlock, WordTimestamp } from "@/types/project";
 import { defaultAnimation, defaultStyle } from "@/store/useLyricStore";
+import { snapToOnset, type AudioAnalysis } from "./vad";
+import {
+  fillWordGaps,
+  extendBlocksToNextLine,
+  MIN_BLOCK_DURATION,
+  r3,
+} from "./timeUtils";
 
 type FlatLyricWord = {
   original: string;
@@ -9481,6 +9488,19 @@ export type AlignmentResult = {
   matchedWords: number;
   totalWords: number;
   warning?: string;
+  /** how far, on average, the aligner had to move block starts to hit onsets */
+  onsetCorrectionMs: number;
+};
+
+export type AlignOptions = {
+  /** listening pass — enables onset snapping and silence-aware line holds */
+  analysis?: AudioAnalysis | null;
+  /** hold each line until the next one begins (karaoke look) */
+  holdLines?: boolean;
+  /** max seconds a line may be held past its last word */
+  maxLineHold?: number;
+  /** onset snap tolerance, seconds */
+  onsetTolerance?: number;
 };
 
 function createId(): string {
@@ -9493,9 +9513,9 @@ function createId(): string {
 function estimateSyllableCount(word: string): number {
   const clean = word.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
   if (!clean) return 1;
-  // CJK characters
-  if (/[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]/.test(clean)) return Math.max(1, clean.length);
-
+  if (/[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]/.test(clean)) {
+    return Math.max(1, clean.length);
+  }
   const vowels = clean.match(/[aeiouyàáâäãåèéêëìíîïòóôöõùúûüýÿ]+/g);
   let count = vowels ? vowels.length : Math.ceil(clean.length / 3);
   if (/[^aeiouy]e$/.test(clean) && count > 1) count -= 1;
@@ -9516,84 +9536,56 @@ function editDistance(a: string, b: string): number {
   if (a === b) return 0;
   if (!a.length) return b.length;
   if (!b.length) return a.length;
-
-  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
-  const current = new Array<number>(b.length + 1);
-
+  const prev = new Array<number>(b.length + 1);
+  const cur = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
   for (let i = 1; i <= a.length; i++) {
-    current[0] = i;
-
+    cur[0] = i;
     for (let j = 1; j <= b.length; j++) {
-      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1;
-      current[j] = Math.min(
-        current[j - 1] + 1,
-        previous[j] + 1,
-        previous[j - 1] + substitutionCost
-      );
+      const sub = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + sub);
     }
-
-    for (let j = 0; j <= b.length; j++) {
-      previous[j] = current[j];
-    }
+    for (let j = 0; j <= b.length; j++) prev[j] = cur[j];
   }
-
-  return previous[b.length];
+  return prev[b.length];
 }
 
 function tokenSimilarity(a: string, b: string): number {
   if (!a || !b) return 0;
   if (a === b) return 1;
-
-  const noApostropheA = a.replace(/'/g, "");
-  const noApostropheB = b.replace(/'/g, "");
-  if (noApostropheA === noApostropheB) return 0.98;
-
-  // Prefix matching e.g. "singing" vs "sing"
-  if (a.length >= 3 && b.length >= 3 && (a.startsWith(b) || b.startsWith(a))) {
-    return 0.88;
-  }
-
+  const na = a.replace(/'/g, "");
+  const nb = b.replace(/'/g, "");
+  if (na === nb) return 0.98;
+  if (a.length >= 3 && b.length >= 3 && (a.startsWith(b) || b.startsWith(a))) return 0.88;
   const longest = Math.max(a.length, b.length);
-  if (longest === 0) return 0;
-
+  if (!longest) return 0;
   return Math.max(0, 1 - editDistance(a, b) / longest);
 }
 
 function sanitizeWhisperWords(words: GroqWord[]): GroqWord[] {
   return words
-    .map((word) => {
-      const start = Math.max(0, Number(word.start) || 0);
-      const rawEnd = Number(word.end);
-      const end = Number.isFinite(rawEnd)
-        ? Math.max(start + 0.02, rawEnd)
-        : start + 0.12;
-
-      return {
-        word: String(word.word || "").trim(),
-        start,
-        end,
-      };
+    .map((w) => {
+      const start = Math.max(0, Number(w.start) || 0);
+      const rawEnd = Number(w.end);
+      const end = Number.isFinite(rawEnd) ? Math.max(start + 0.02, rawEnd) : start + 0.12;
+      return { word: String(w.word || "").trim(), start, end };
     })
     .filter(
-      (word) =>
-        word.word.length > 0 &&
-        normalizeToken(word.word).length > 0 &&
-        Number.isFinite(word.start) &&
-        Number.isFinite(word.end)
+      (w) =>
+        w.word.length > 0 &&
+        normalizeToken(w.word).length > 0 &&
+        Number.isFinite(w.start) &&
+        Number.isFinite(w.end),
     )
     .sort((a, b) => a.start - b.start);
 }
 
 function flattenLyrics(blockTexts: string[]): FlatLyricWord[] {
   const result: FlatLyricWord[] = [];
-
   blockTexts.forEach((text, blockIndex) => {
-    const words = text.split(/\s+/).filter(Boolean);
-
-    for (const word of words) {
+    for (const word of text.split(/\s+/).filter(Boolean)) {
       const normalized = normalizeToken(word);
       if (!normalized) continue;
-
       result.push({
         original: word,
         normalized,
@@ -9602,71 +9594,57 @@ function flattenLyrics(blockTexts: string[]): FlatLyricWord[] {
       });
     }
   });
-
   return result;
 }
 
-/**
- * Dynamic Time Warping (DTW) Sequence Alignment:
- * Align user's exact lyrics onto Whisper word timestamps with prosodic weighting.
- */
+/* ------------------------------------------------------------------ *
+ * DTW / Levenshtein hybrid — the user's lyrics are the source of truth,
+ * the transcript is only a time grid.
+ * ------------------------------------------------------------------ */
+
 function createWordMapping(
   lyricWords: FlatLyricWord[],
-  whisperWords: GroqWord[]
+  whisperWords: GroqWord[],
 ): Array<number | null> {
-  const lyricCount = lyricWords.length;
-  const whisperCount = whisperWords.length;
+  const L = lyricWords.length;
+  const Wn = whisperWords.length;
+  if (!L || !Wn) return new Array<number | null>(L).fill(null);
 
-  if (lyricCount === 0 || whisperCount === 0) {
-    return Array.from({ length: lyricCount }, () => null);
-  }
-
-  const width = whisperCount + 1;
-  const directions = new Uint8Array((lyricCount + 1) * width);
+  const width = Wn + 1;
+  const directions = new Uint8Array((L + 1) * width);
 
   let previous = new Float64Array(width);
   let current = new Float64Array(width);
 
   previous[0] = 0;
-  for (let j = 1; j <= whisperCount; j++) {
+  for (let j = 1; j <= Wn; j++) {
     previous[j] = previous[j - 1] - 0.1;
     directions[j] = 3;
   }
 
-  for (let i = 1; i <= lyricCount; i++) {
+  const whisperNorm = whisperWords.map((w) => normalizeToken(w.word));
+
+  for (let i = 1; i <= L; i++) {
     current[0] = previous[0] - 1.1;
     directions[i * width] = 2;
-
     const lyricToken = lyricWords[i - 1].normalized;
 
-    for (let j = 1; j <= whisperCount; j++) {
-      const whisperToken = normalizeToken(whisperWords[j - 1].word);
-      const similarity = tokenSimilarity(lyricToken, whisperToken);
-
-      const diagonalScore =
+    for (let j = 1; j <= Wn; j++) {
+      const sim = tokenSimilarity(lyricToken, whisperNorm[j - 1]);
+      const diag =
         previous[j - 1] +
-        (similarity >= 0.98
-          ? 3.5
-          : similarity >= 0.82
-          ? 2.0
-          : similarity >= 0.62
-          ? 0.5
-          : -1.0);
+        (sim >= 0.98 ? 3.5 : sim >= 0.82 ? 2.0 : sim >= 0.62 ? 0.5 : -1.0);
+      const skipLyric = previous[j] - 1.1;
+      const skipWhisper = current[j - 1] - 0.1;
 
-      const skipLyricScore = previous[j] - 1.1;
-      const skipWhisperScore = current[j - 1] - 0.1;
-
-      if (
-        diagonalScore >= skipLyricScore &&
-        diagonalScore >= skipWhisperScore
-      ) {
-        current[j] = diagonalScore;
+      if (diag >= skipLyric && diag >= skipWhisper) {
+        current[j] = diag;
         directions[i * width + j] = 1;
-      } else if (skipLyricScore >= skipWhisperScore) {
-        current[j] = skipLyricScore;
+      } else if (skipLyric >= skipWhisper) {
+        current[j] = skipLyric;
         directions[i * width + j] = 2;
       } else {
-        current[j] = skipWhisperScore;
+        current[j] = skipWhisper;
         directions[i * width + j] = 3;
       }
     }
@@ -9677,186 +9655,153 @@ function createWordMapping(
     current.fill(0);
   }
 
-  const mapping: Array<number | null> = Array.from(
-    { length: lyricCount },
-    () => null
-  );
-
-  let i = lyricCount;
-  let j = whisperCount;
-
+  const mapping = new Array<number | null>(L).fill(null);
+  let i = L;
+  let j = Wn;
   while (i > 0 || j > 0) {
-    const direction = directions[i * width + j];
-
-    if (direction === 1 && i > 0 && j > 0) {
-      const similarity = tokenSimilarity(
-        lyricWords[i - 1].normalized,
-        normalizeToken(whisperWords[j - 1].word)
-      );
-
-      if (similarity >= 0.58) {
-        mapping[i - 1] = j - 1;
-      }
-
+    const dir = directions[i * width + j];
+    if (dir === 1 && i > 0 && j > 0) {
+      const sim = tokenSimilarity(lyricWords[i - 1].normalized, whisperNorm[j - 1]);
+      if (sim >= 0.58) mapping[i - 1] = j - 1;
       i--;
       j--;
-    } else if (direction === 2 && i > 0) {
-      i--;
-    } else if (direction === 3 && j > 0) {
-      j--;
-    } else if (i > 0) {
-      i--;
-    } else {
-      j--;
-    }
+    } else if (dir === 2 && i > 0) i--;
+    else if (dir === 3 && j > 0) j--;
+    else if (i > 0) i--;
+    else j--;
   }
-
   return mapping;
 }
 
-function findPreviousMapped(
-  mapping: Array<number | null>,
-  index: number
-): number {
-  for (let i = index - 1; i >= 0; i--) {
-    if (mapping[i] !== null) return i;
-  }
+const prevMapped = (m: Array<number | null>, i: number) => {
+  for (let k = i - 1; k >= 0; k--) if (m[k] !== null) return k;
   return -1;
-}
-
-function findNextMapped(
-  mapping: Array<number | null>,
-  index: number
-): number {
-  for (let i = index + 1; i < mapping.length; i++) {
-    if (mapping[i] !== null) return i;
-  }
+};
+const nextMapped = (m: Array<number | null>, i: number) => {
+  for (let k = i + 1; k < m.length; k++) if (m[k] !== null) return k;
   return -1;
-}
+};
 
-/**
- * Build Interpolated Timestamps with Prosodic Syllable Allocation
- */
 function buildInterpolatedTimestamps(
   lyricWords: FlatLyricWord[],
   whisperWords: GroqWord[],
   mapping: Array<number | null>,
-  duration: number
+  duration: number,
 ): WordTimestamp[] {
   const safeDuration = Math.max(
     duration,
     whisperWords[whisperWords.length - 1]?.end || 0,
     lyricWords.length * 0.2,
-    1
+    1,
   );
 
-  const output: WordTimestamp[] = lyricWords.map((lyricWord, index) => {
-    const mappedIndex = mapping[index];
+  const out: WordTimestamp[] = lyricWords.map((lw, index) => {
+    const mapped = mapping[index];
 
-    if (mappedIndex !== null) {
-      const mapped = whisperWords[mappedIndex];
+    if (mapped !== null) {
+      const m = whisperWords[mapped];
       return {
-        word: lyricWord.original,
-        start: mapped.start,
-        end: Math.max(mapped.start + 0.03, mapped.end),
+        word: lw.original,
+        start: m.start,
+        end: Math.max(m.start + 0.03, m.end),
+        confidence: 0.97,
+        anchored: true,
       };
     }
 
-    const previousLyricIndex = findPreviousMapped(mapping, index);
-    const nextLyricIndex = findNextMapped(mapping, index);
+    const pi = prevMapped(mapping, index);
+    const ni = nextMapped(mapping, index);
 
-    if (previousLyricIndex >= 0 && nextLyricIndex >= 0) {
-      const previousWhisperIndex = mapping[previousLyricIndex];
-      const nextWhisperIndex = mapping[nextLyricIndex];
+    if (pi >= 0 && ni >= 0) {
+      const pw = mapping[pi]!;
+      const nw = mapping[ni]!;
+      const rangeStart = whisperWords[pw].end;
+      const rangeEnd = whisperWords[nw].start;
 
-      if (previousWhisperIndex !== null && nextWhisperIndex !== null) {
-        const rangeStart = whisperWords[previousWhisperIndex].end;
-        const rangeEnd = whisperWords[nextWhisperIndex].start;
-
-        // Prosodic Syllable Weighting among unmapped gap words
-        let totalGapSyllables = 0;
-        let elapsedSyllables = 0;
-
-        for (let k = previousLyricIndex + 1; k < nextLyricIndex; k++) {
-          const syl = lyricWords[k].syllables || 1;
-          totalGapSyllables += syl;
-          if (k < index) elapsedSyllables += syl;
-        }
-
-        const mySyllables = lyricWord.syllables || 1;
-        const availableTime = Math.max(0.04 * (nextLyricIndex - previousLyricIndex - 1), rangeEnd - rangeStart);
-
-        const startFraction = totalGapSyllables > 0 ? elapsedSyllables / totalGapSyllables : 0;
-        const durationFraction = totalGapSyllables > 0 ? mySyllables / totalGapSyllables : 1 / (nextLyricIndex - previousLyricIndex - 1);
-
-        const start = rangeStart + startFraction * availableTime;
-        const wordDur = Math.max(0.04, durationFraction * availableTime * 0.9);
-
-        return {
-          word: lyricWord.original,
-          start,
-          end: Math.min(rangeEnd, start + wordDur),
-        };
+      let totalSyl = 0;
+      let elapsedSyl = 0;
+      for (let k = pi + 1; k < ni; k++) {
+        const syl = lyricWords[k].syllables || 1;
+        totalSyl += syl;
+        if (k < index) elapsedSyl += syl;
       }
+      const mySyl = lw.syllables || 1;
+      const gapWords = Math.max(1, ni - pi - 1);
+      const available = Math.max(0.05 * gapWords, rangeEnd - rangeStart);
+      const startFrac = totalSyl > 0 ? elapsedSyl / totalSyl : 0;
+      const durFrac = totalSyl > 0 ? mySyl / totalSyl : 1 / gapWords;
+
+      const start = rangeStart + startFrac * available;
+      const span = Math.max(0.06, durFrac * available * 0.94);
+      return {
+        word: lw.original,
+        start,
+        end: Math.min(rangeEnd, start + span),
+        confidence: 0.6,
+        anchored: false,
+      };
     }
 
-    if (previousLyricIndex >= 0) {
-      const previousWhisperIndex = mapping[previousLyricIndex];
-      if (previousWhisperIndex !== null) {
-        const offset = index - previousLyricIndex;
-        const start = whisperWords[previousWhisperIndex].end + (offset - 1) * 0.2;
-        return {
-          word: lyricWord.original,
-          start: Math.min(safeDuration, start),
-          end: Math.min(safeDuration, start + 0.16),
-        };
-      }
+    if (pi >= 0) {
+      const pw = mapping[pi]!;
+      const offset = index - pi;
+      const start = whisperWords[pw].end + (offset - 1) * 0.22;
+      return {
+        word: lw.original,
+        start: Math.min(safeDuration, start),
+        end: Math.min(safeDuration, start + 0.2),
+        confidence: 0.35,
+        anchored: false,
+      };
     }
 
-    if (nextLyricIndex >= 0) {
-      const nextWhisperIndex = mapping[nextLyricIndex];
-      if (nextWhisperIndex !== null) {
-        const distance = nextLyricIndex - index;
-        const end = Math.max(0.03, whisperWords[nextWhisperIndex].start - (distance - 1) * 0.2);
-        return {
-          word: lyricWord.original,
-          start: Math.max(0, end - 0.16),
-          end,
-        };
-      }
+    if (ni >= 0) {
+      const nw = mapping[ni]!;
+      const dist = ni - index;
+      const end = Math.max(0.05, whisperWords[nw].start - (dist - 1) * 0.22);
+      return {
+        word: lw.original,
+        start: Math.max(0, end - 0.2),
+        end,
+        confidence: 0.35,
+        anchored: false,
+      };
     }
 
     const slot = safeDuration / Math.max(1, lyricWords.length);
     const start = index * slot;
-
     return {
-      word: lyricWord.original,
+      word: lw.original,
       start,
-      end: Math.min(safeDuration, start + Math.max(0.05, slot * 0.85)),
+      end: Math.min(safeDuration, start + Math.max(0.06, slot * 0.85)),
+      confidence: 0.2,
+      anchored: false,
     };
   });
 
+  // enforce monotonic starts without crushing anything
   let cursor = 0;
-
-  return output.map((word) => {
-    const start = Math.max(cursor, word.start);
-    const end = Math.max(start + 0.025, word.end);
+  return out.map((w) => {
+    const start = Math.max(cursor, w.start);
+    const end = Math.max(start + 0.03, w.end);
     cursor = start + 0.001;
-
     return {
-      ...word,
-      start: Number(Math.min(start, safeDuration).toFixed(3)),
-      end: Number(Math.min(Math.max(start + 0.025, end), safeDuration).toFixed(3)),
+      ...w,
+      start: r3(Math.min(start, safeDuration)),
+      end: r3(Math.min(Math.max(start + 0.03, end), safeDuration)),
     };
   });
 }
 
+/* ------------------------------------------------------------------ */
+
 export function alignLyricsToWhisper(
   blockTexts: string[],
   whisperResult: GroqTranscriptionResult,
-  audioDuration: number
+  audioDuration: number,
+  options: AlignOptions = {},
 ): AlignmentResult {
-  const cleanBlocks = blockTexts.map((block) => block.trim()).filter(Boolean);
+  const cleanBlocks = blockTexts.map((b) => b.trim()).filter(Boolean);
   const lyricWords = flattenLyrics(cleanBlocks);
   const whisperWords = sanitizeWhisperWords(whisperResult.words || []);
 
@@ -9878,7 +9823,7 @@ export function alignLyricsToWhisper(
     lyricWords,
     whisperWords,
     mapping,
-    Math.max(audioDuration, whisperResult.duration || 0)
+    Math.max(audioDuration, whisperResult.duration || 0),
   );
 
   const groupedWords: WordTimestamp[][] = cleanBlocks.map(() => []);
@@ -9887,21 +9832,46 @@ export function alignLyricsToWhisper(
     groupedWords[blockIndex].push(timestamp);
   });
 
+  let onsetCorrectionTotal = 0;
+  let onsetCorrectionCount = 0;
+  const onsetTolerance = options.onsetTolerance ?? 0.32;
+  const analysis = options.analysis;
+
   const rawBlocks = cleanBlocks.map((text, blockIndex) => {
     const words = groupedWords[blockIndex];
     if (words.length === 0) return null;
 
-    const startTime = Math.max(0, words[0].start - 0.02);
-    const endTime = Math.max(
-      startTime + 0.15,
-      words[words.length - 1].end + 0.04
+    let startTime = Math.max(0, words[0].start - 0.02);
+    let endTime = Math.max(
+      startTime + MIN_BLOCK_DURATION,
+      words[words.length - 1].end + 0.04,
     );
+
+    // snap block start to nearest onset if VAD analysis is available
+    if (analysis && analysis.onsets && analysis.onsets.length > 0) {
+      const snapped = snapToOnset(analysis.onsets, startTime, onsetTolerance);
+      if (snapped !== null) {
+        const delta = snapped - startTime;
+        onsetCorrectionTotal += Math.abs(delta);
+        onsetCorrectionCount++;
+        startTime = snapped;
+        // Shift word timings in this block by delta
+        words.forEach((w) => {
+          w.start = r3(Math.max(0, w.start + delta));
+          w.end = r3(Math.max(w.start + 0.03, w.end + delta));
+        });
+        endTime = Math.max(
+          startTime + MIN_BLOCK_DURATION,
+          words[words.length - 1].end + 0.04,
+        );
+      }
+    }
 
     const block: LyricBlock = {
       id: createId(),
       text,
-      startTime: Number(startTime.toFixed(3)),
-      endTime: Number(endTime.toFixed(3)),
+      startTime: r3(startTime),
+      endTime: r3(endTime),
       words,
       style: {
         ...defaultStyle,
@@ -9920,15 +9890,38 @@ export function alignLyricsToWhisper(
     return block;
   });
 
-  const blocks: LyricBlock[] = rawBlocks
+  let blocks: LyricBlock[] = rawBlocks
     .filter((block): block is LyricBlock => block !== null)
     .sort((a, b) => a.startTime - b.startTime);
+
+  // De-overlap neighboring blocks
+  for (let i = 1; i < blocks.length; i++) {
+    if (blocks[i].startTime < blocks[i - 1].endTime) {
+      blocks[i - 1].endTime = r3(blocks[i].startTime);
+    }
+  }
+
+  // Extend end times to close gaps
+  if (options.holdLines !== false) {
+    const maxHold = options.maxLineHold ?? 1.6;
+    blocks = extendBlocksToNextLine(blocks, maxHold, Math.max(audioDuration, whisperResult.duration || 0));
+  }
+
+  // Apply fillWordGaps to each block
+  blocks = blocks.map((b) => ({
+    ...b,
+    words: fillWordGaps(b.words, b.endTime),
+  }));
+
+  const onsetCorrectionMs =
+    onsetCorrectionCount > 0 ? (onsetCorrectionTotal / onsetCorrectionCount) * 1000 : 0;
 
   return {
     blocks,
     confidence,
     matchedWords,
     totalWords: lyricWords.length,
+    onsetCorrectionMs,
     warning:
       confidence < 0.65
         ? "Low alignment confidence. Check that the supplied lyrics match the recorded performance, including repeated choruses."
@@ -10007,36 +10000,76 @@ export const PRESET_CATEGORIES: Array<{ id: PresetCategory | "all"; label: strin
 ================================================================================
 FILE: src\lib\audioEngine.ts
 ================================================================================
+import { analyzeAudioBuffer, type AudioAnalysis } from "./vad";
+
 type Listener = (time: number, playing: boolean) => void;
 
-const ENVELOPE_RATE = 100; // samples per second
+const ENVELOPE_RATE = 100;
+const SCHEDULE_AHEAD = 0.08; // seconds — deterministic start point
+
+const clampNum = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
   private buffer: AudioBuffer | null = null;
   private source: AudioBufferSourceNode | null = null;
   private gain: GainNode | null = null;
-  private startedAtCtx = 0;
+
+  /** ctx.currentTime at which `startOffset` is *heard*. */
+  private startCtxTime = 0;
   private startOffset = 0;
   private playing = false;
   private raf = 0;
   private listeners = new Set<Listener>();
+  private region: { start: number; end: number; loop: boolean } | null = null;
+
+  /** user-tuned extra compensation, ms (positive = visuals wait longer) */
+  private userLatencyMs = 0;
 
   envelope = new Float32Array(0);
   bassEnvelope = new Float32Array(0);
   peaks: number[] = [];
   duration = 0;
+  analysis: AudioAnalysis | null = null;
+
+  /* ------------------------------------------------------------------ */
 
   private ensureCtx() {
     if (!this.ctx) {
-      this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const Ctor =
+        window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      this.ctx = new Ctor({ latencyHint: "interactive" });
       this.gain = this.ctx.createGain();
       this.gain.connect(this.ctx.destination);
     }
     return this.ctx;
   }
 
-  async load(file: File | ArrayBuffer, peakCount = 1200) {
+  /** Round-trip latency the browser reports, in seconds. */
+  get hardwareLatency() {
+    const ctx = this.ctx as (AudioContext & { outputLatency?: number }) | null;
+    if (!ctx) return 0;
+    const out = typeof ctx.outputLatency === "number" ? ctx.outputLatency : 0;
+    const base = typeof ctx.baseLatency === "number" ? ctx.baseLatency : 0;
+    // outputLatency already includes baseLatency on Chrome; use the larger.
+    return Math.max(out, base);
+  }
+
+  get latencySeconds() {
+    return this.hardwareLatency + this.userLatencyMs / 1000;
+  }
+
+  setLatencyMs(ms: number) {
+    this.userLatencyMs = clampNum(ms, -500, 500);
+  }
+
+  get latencyMs() {
+    return this.userLatencyMs;
+  }
+
+  /* ------------------------------------------------------------------ */
+
+  async load(file: File | ArrayBuffer, peakCount = 1400) {
     const ctx = this.ensureCtx();
     const bytes = file instanceof File ? await file.arrayBuffer() : file;
     this.stop();
@@ -10044,9 +10077,21 @@ class AudioEngine {
     this.duration = this.buffer.duration;
     this.computeEnvelopes();
     this.peaks = this.computePeaks(peakCount);
+    this.analysis = null;
     this.startOffset = 0;
+    this.region = null;
     this.emit();
     return { duration: this.duration, peaks: this.peaks };
+  }
+
+  /** Heavy listening pass. Cached; safe to call repeatedly. */
+  async listen(frameRate = 100): Promise<AudioAnalysis | null> {
+    if (!this.buffer) return null;
+    if (this.analysis && this.analysis.frameRate === frameRate) return this.analysis;
+    // yield so the UI can paint a "listening…" state
+    await new Promise((r) => setTimeout(r, 0));
+    this.analysis = analyzeAudioBuffer(this.buffer, frameRate);
+    return this.analysis;
   }
 
   private computeEnvelopes() {
@@ -10057,6 +10102,7 @@ class AudioEngine {
     const block = Math.max(1, Math.floor(sr / ENVELOPE_RATE));
     const env = new Float32Array(n);
     const bass = new Float32Array(n);
+    const alpha = 1 - Math.exp((-2 * Math.PI * 150) / sr);
     let lp = 0;
     for (let i = 0; i < n; i++) {
       let sum = 0;
@@ -10065,7 +10111,7 @@ class AudioEngine {
       for (let j = 0; j < block && off + j < data.length; j++) {
         const s = data[off + j];
         sum += s * s;
-        lp += (s - lp) * 0.02; // crude ~150Hz one-pole low pass
+        lp += (s - lp) * alpha;
         bassSum += lp * lp;
       }
       env[i] = Math.sqrt(sum / block);
@@ -10103,14 +10149,26 @@ class AudioEngine {
   amplitudeAt(t: number, which: "rms" | "bass" = "rms") {
     const src = which === "bass" ? this.bassEnvelope : this.envelope;
     if (!src.length) return 0;
-    const i = clampInt(Math.floor(t * ENVELOPE_RATE), 0, src.length - 1);
+    const i = clampNum(Math.floor(t * ENVELOPE_RATE), 0, src.length - 1) | 0;
     return src[i];
   }
 
+  /* ------------------------------------------------------------------ */
+
+  /** Latency-compensated position — this is what the renderer must use. */
   get time() {
     if (!this.playing || !this.ctx) return this.startOffset;
-    const t = this.startOffset + (this.ctx.currentTime - this.startedAtCtx);
-    return this.duration ? Math.min(t, this.duration) : t;
+    const raw = this.startOffset + (this.ctx.currentTime - this.startCtxTime);
+    const heard = raw - this.latencySeconds;
+    const lo = this.startOffset;
+    const hi = this.duration || Number.MAX_SAFE_INTEGER;
+    return clampNum(heard, lo, hi);
+  }
+
+  /** Uncompensated scheduling clock — only useful for debugging. */
+  get rawTime() {
+    if (!this.playing || !this.ctx) return this.startOffset;
+    return this.startOffset + (this.ctx.currentTime - this.startCtxTime);
   }
 
   get isPlaying() {
@@ -10121,33 +10179,57 @@ class AudioEngine {
     return this.buffer;
   }
 
+  get activeRegion() {
+    return this.region;
+  }
+
+  /* ------------------------------------------------------------------ */
+
   async play() {
     if (this.playing) return;
     const ctx = this.ensureCtx();
     if (ctx.state === "suspended") await ctx.resume();
 
+    const t0 = ctx.currentTime + SCHEDULE_AHEAD;
+
     if (!this.buffer) {
-      // Silent mode: advance clock for preview animation.
-      this.startedAtCtx = ctx.currentTime;
+      // silent preview mode — still advance the clock
+      this.startCtxTime = t0;
       this.playing = true;
       this.loop();
       return;
     }
-    if (this.startOffset >= this.duration - 0.01) this.startOffset = 0;
+
+    const regionEnd = this.region ? this.region.end : this.duration;
+    if (this.startOffset >= regionEnd - 0.01) {
+      this.startOffset = this.region ? this.region.start : 0;
+    }
 
     const src = ctx.createBufferSource();
     src.buffer = this.buffer;
     src.connect(this.gain!);
     src.onended = () => {
-      if (this.source === src && this.playing) {
+      if (this.source !== src || !this.playing) return;
+      if (this.region?.loop) {
+        this.startOffset = this.region.start;
         this.playing = false;
-        this.startOffset = this.duration;
-        this.emit();
+        void this.play();
+        return;
       }
+      this.playing = false;
+      this.startOffset = regionEnd;
+      this.emit();
     };
-    src.start(0, this.startOffset);
+
+    const playDur = this.region
+      ? Math.max(0.01, this.region.end - this.startOffset)
+      : undefined;
+
+    if (playDur === undefined) src.start(t0, this.startOffset);
+    else src.start(t0, this.startOffset, playDur);
+
     this.source = src;
-    this.startedAtCtx = ctx.currentTime;
+    this.startCtxTime = t0;
     this.playing = true;
     this.loop();
   }
@@ -10162,23 +10244,55 @@ class AudioEngine {
   }
 
   toggle() {
-    return this.playing ? (this.pause(), false) : (void this.play(), true);
+    if (this.playing) {
+      this.pause();
+      return false;
+    }
+    void this.play();
+    return true;
   }
 
   seek(t: number) {
-    const target = this.duration ? Math.max(0, Math.min(t, this.duration)) : Math.max(0, t);
+    const lo = this.region ? this.region.start : 0;
+    const hi = this.region ? this.region.end : this.duration || Number.MAX_SAFE_INTEGER;
+    const target = clampNum(t, lo, hi);
     const wasPlaying = this.playing;
     if (wasPlaying) {
       this.stopSource();
       this.playing = false;
+      cancelAnimationFrame(this.raf);
     }
     this.startOffset = target;
     if (wasPlaying) void this.play();
     else this.emit();
   }
 
+  /** Audition one segment. `loop` keeps it cycling until clearRegion(). */
+  playRegion(start: number, end: number, loop = false) {
+    const s = Math.max(0, start);
+    const e = Math.max(s + 0.05, end);
+    this.stopSource();
+    this.playing = false;
+    cancelAnimationFrame(this.raf);
+    this.region = { start: s, end: e, loop };
+    this.startOffset = s;
+    void this.play();
+  }
+
+  clearRegion() {
+    const wasPlaying = this.playing;
+    const at = this.time;
+    this.region = null;
+    if (wasPlaying) {
+      this.stopSource();
+      this.playing = false;
+      this.startOffset = at;
+      void this.play();
+    } else this.emit();
+  }
+
   setVolume(v: number) {
-    if (this.gain) this.gain.gain.value = Math.max(0, Math.min(1, v));
+    if (this.gain) this.gain.gain.value = clampNum(v, 0, 1);
   }
 
   stop() {
@@ -10193,7 +10307,9 @@ class AudioEngine {
         this.source.onended = null;
         this.source.stop();
         this.source.disconnect();
-      } catch {}
+      } catch {
+        /* already stopped */
+      }
       this.source = null;
     }
   }
@@ -10201,9 +10317,17 @@ class AudioEngine {
   private loop = () => {
     if (!this.playing) return;
     this.emit();
-    if (this.duration && this.time >= this.duration) {
+    const limit = this.region ? this.region.end : this.duration;
+    if (limit && this.time >= limit - 1e-4) {
+      if (this.region?.loop) {
+        this.stopSource();
+        this.playing = false;
+        this.startOffset = this.region.start;
+        void this.play();
+        return;
+      }
       this.playing = false;
-      this.startOffset = this.duration;
+      this.startOffset = limit;
       this.stopSource();
       this.emit();
       return;
@@ -10223,10 +10347,6 @@ class AudioEngine {
     const t = this.time;
     for (const fn of this.listeners) fn(t, this.playing);
   }
-}
-
-function clampInt(v: number, a: number, b: number) {
-  return v < a ? a : v > b ? b : v;
 }
 
 export const audioEngine = new AudioEngine();
@@ -12790,25 +12910,26 @@ FILE: src\lib\timeUtils.ts
 ================================================================================
 import type { LyricBlock, WordTimestamp } from "@/types/project";
 
-export const MIN_BLOCK_DURATION = 0.12;
-export const MIN_WORD_DURATION = 0.03;
+export const MIN_BLOCK_DURATION = 0.18;
+export const MIN_WORD_DURATION = 0.04;
+/** how long a word's highlight may hold past its own end while waiting for the next */
+export const MAX_WORD_HOLD = 0.55;
 
 export const r3 = (n: number) => Math.round(n * 1000) / 1000;
 export const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
-/** Move every word by a constant delta (used when dragging a whole block). */
+/* ------------------------------------------------------------------ *
+ * word-level operations
+ * ------------------------------------------------------------------ */
+
 export function shiftWords(words: WordTimestamp[], delta: number): WordTimestamp[] {
   return words.map((w) => ({
-    word: w.word,
+    ...w,
     start: r3(Math.max(0, w.start + delta)),
     end: r3(Math.max(MIN_WORD_DURATION, w.end + delta)),
   }));
 }
 
-/**
- * Linearly time-warp words from [oldStart,oldEnd] onto [newStart,newEnd].
- * This keeps captions synced when trimming a block from left or right edge.
- */
 export function scaleWords(
   words: WordTimestamp[],
   oldStart: number,
@@ -12822,41 +12943,56 @@ export function scaleWords(
   return words.map((w) => {
     const s = newStart + (w.start - oldStart) * k;
     const e = newStart + (w.end - oldStart) * k;
-    return { word: w.word, start: r3(Math.max(0, s)), end: r3(Math.max(s + MIN_WORD_DURATION, e)) };
+    return {
+      ...w,
+      start: r3(Math.max(0, s)),
+      end: r3(Math.max(s + MIN_WORD_DURATION, e)),
+    };
   });
 }
 
-export type RetimeMode = "move" | "scale" | "trim";
-
 /**
- * Produce a fully consistent block patch for a new [start,end].
- *  move  → shift words (duration unchanged)
- *  scale → time-warp words (duration changed, karaoke stays proportional)
- *  trim  → keep absolute word timings, only clip the visible window
+ * THE fix for "the highlight blinks off between words".
+ *
+ * Whisper reports tight word ends, so there are 40–300 ms holes where no word
+ * is `singing` and the karaoke fill snaps back. Extend every word up to the
+ * next word's start (capped by MAX_WORD_HOLD so a long instrumental pause
+ * doesn't leave one word lit forever).
  */
-export function retimeBlock(
-  block: LyricBlock,
-  newStart: number,
-  newEnd: number,
-  mode: RetimeMode,
-): Partial<LyricBlock> {
-  const start = r3(Math.max(0, newStart));
-  const end = r3(Math.max(start + MIN_BLOCK_DURATION, newEnd));
-
-  if (mode === "move") {
-    return { startTime: start, endTime: end, words: shiftWords(block.words, start - block.startTime) };
+export function fillWordGaps(
+  words: WordTimestamp[],
+  blockEnd: number,
+  maxHold = MAX_WORD_HOLD,
+): WordTimestamp[] {
+  if (words.length === 0) return words;
+  const out = words.map((w) => ({ ...w }));
+  for (let i = 0; i < out.length; i++) {
+    const nextStart = i + 1 < out.length ? out[i + 1].start : blockEnd;
+    const gap = nextStart - out[i].end;
+    if (gap > 0.001) out[i].end = r3(out[i].end + Math.min(gap, maxHold));
+    if (out[i].end <= out[i].start) out[i].end = r3(out[i].start + MIN_WORD_DURATION);
   }
-  if (mode === "trim") {
-    return { startTime: start, endTime: end, words: block.words };
-  }
-  return {
-    startTime: start,
-    endTime: end,
-    words: scaleWords(block.words, block.startTime, block.endTime, start, end),
-  };
+  return out;
 }
 
-/** Drag a single word boundary; neighbours absorb the change so nothing overlaps. */
+/** Even syllable-agnostic distribution — used when a block has no word data. */
+export function distributeWords(
+  text: string,
+  start: number,
+  end: number,
+): WordTimestamp[] {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return [];
+  const span = Math.max(MIN_BLOCK_DURATION, end - start);
+  const per = span / tokens.length;
+  return tokens.map((word, i) => ({
+    word,
+    start: r3(start + i * per),
+    end: r3(start + (i + 1) * per),
+    confidence: 0.4,
+  }));
+}
+
 export function retimeWordBoundary(
   words: WordTimestamp[],
   index: number,
@@ -12874,9 +13010,232 @@ export function retimeWordBoundary(
     if (index > 0) out[index - 1].end = cur.start;
   } else {
     const lo = cur.start + MIN_WORD_DURATION;
-    const hi = index < out.length - 1 ? out[index + 1].end - MIN_WORD_DURATION : Number.MAX_SAFE_INTEGER;
+    const hi =
+      index < out.length - 1
+        ? out[index + 1].end - MIN_WORD_DURATION
+        : Number.MAX_SAFE_INTEGER;
     cur.end = r3(clamp(time, lo, hi));
     if (index < out.length - 1) out[index + 1].start = cur.end;
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * block-level operations
+ * ------------------------------------------------------------------ */
+
+export type RetimeMode = "move" | "scale" | "trim";
+
+/**
+ * `move`  – shift words with the block (duration unchanged)   ← dragging
+ * `scale` – time-warp words to fill the new span              ← stretching
+ * `trim`  – keep absolute word timings, only clip the window  ← NEVER touches sync
+ */
+export function retimeBlock(
+  block: LyricBlock,
+  newStart: number,
+  newEnd: number,
+  mode: RetimeMode,
+): Partial<LyricBlock> {
+  const start = r3(Math.max(0, newStart));
+  const end = r3(Math.max(start + MIN_BLOCK_DURATION, newEnd));
+
+  if (mode === "move") {
+    return {
+      startTime: start,
+      endTime: end,
+      words: shiftWords(block.words, start - block.startTime),
+    };
+  }
+  if (mode === "trim") {
+    return { startTime: start, endTime: end, words: block.words };
+  }
+  return {
+    startTime: start,
+    endTime: end,
+    words: scaleWords(block.words, block.startTime, block.endTime, start, end),
+  };
+}
+
+export function sortBlocks(blocks: LyricBlock[]) {
+  return [...blocks].sort((a, b) => a.startTime - b.startTime);
+}
+
+/**
+ * Bounds a drag so it can never overlap its neighbours — this REPLACES the old
+ * behaviour of rescaling the neighbours (which silently destroyed their sync).
+ */
+export function neighbourBounds(
+  blocks: LyricBlock[],
+  id: string,
+  duration: number,
+): { lo: number; hi: number } {
+  const sorted = sortBlocks(blocks);
+  const idx = sorted.findIndex((b) => b.id === id);
+  if (idx < 0) return { lo: 0, hi: duration };
+  const lo = idx > 0 ? sorted[idx - 1].endTime : 0;
+  const hi = idx < sorted.length - 1 ? sorted[idx + 1].startTime : duration;
+  return { lo, hi };
+}
+
+export type RippleOptions = {
+  /** stretch the target's word timings with the segment (default true) */
+  stretchWords?: boolean;
+  /** absorb into the neighbour's gap and cascade if it would be crushed */
+  cascade?: boolean;
+  duration: number;
+};
+
+/**
+ * Resize one segment; everything after/before it auto-adjusts.
+ * Locked blocks act as walls. Neighbours are `trim`-retimed, so their word
+ * timestamps are never warped — only their visible window moves.
+ */
+export function rippleResize(
+  blocks: LyricBlock[],
+  id: string,
+  newStart: number,
+  newEnd: number,
+  opts: RippleOptions,
+): LyricBlock[] {
+  const { duration } = opts;
+  const stretchWords = opts.stretchWords !== false;
+  const cascade = opts.cascade !== false;
+
+  const sorted = sortBlocks(blocks).map((b) => ({ ...b }));
+  const idx = sorted.findIndex((b) => b.id === id);
+  if (idx < 0) return blocks;
+
+  let s = clamp(r3(newStart), 0, duration - MIN_BLOCK_DURATION);
+  let e = clamp(r3(newEnd), s + MIN_BLOCK_DURATION, duration);
+
+  const target = sorted[idx];
+  const patch = retimeBlock(target, s, e, stretchWords ? "scale" : "trim");
+  Object.assign(target, patch);
+  s = target.startTime;
+  e = target.endTime;
+
+  // ---- walk left --------------------------------------------------------
+  let wall = s;
+  for (let i = idx - 1; i >= 0; i--) {
+    const b = sorted[i];
+    if (b.endTime <= wall) break;
+    if (b.locked) {
+      // locked block wins: push the target back instead
+      const shifted = Math.max(b.endTime, s);
+      Object.assign(
+        target,
+        retimeBlock(target, shifted, Math.max(shifted + MIN_BLOCK_DURATION, e), "move"),
+      );
+      break;
+    }
+    let bs = b.startTime;
+    let be = wall;
+    if (be - bs < MIN_BLOCK_DURATION) {
+      if (!cascade) {
+        be = bs + MIN_BLOCK_DURATION;
+      } else {
+        bs = be - MIN_BLOCK_DURATION;
+      }
+    }
+    Object.assign(b, retimeBlock(b, bs, be, "trim"));
+    wall = b.startTime;
+    if (!cascade) break;
+  }
+
+  // ---- walk right -------------------------------------------------------
+  wall = target.endTime;
+  for (let i = idx + 1; i < sorted.length; i++) {
+    const b = sorted[i];
+    if (b.startTime >= wall) break;
+    if (b.locked) {
+      const cappedEnd = Math.min(b.startTime, target.endTime);
+      Object.assign(
+        target,
+        retimeBlock(
+          target,
+          Math.min(target.startTime, cappedEnd - MIN_BLOCK_DURATION),
+          cappedEnd,
+          "trim",
+        ),
+      );
+      break;
+    }
+    let bs = wall;
+    let be = b.endTime;
+    if (be - bs < MIN_BLOCK_DURATION) {
+      be = Math.min(duration, bs + MIN_BLOCK_DURATION);
+    }
+    Object.assign(b, retimeBlock(b, bs, be, "trim"));
+    wall = b.endTime;
+    if (!cascade) break;
+  }
+
+  return sorted;
+}
+
+/** Shift every (unlocked) block by delta — used to bake a global offset. */
+export function shiftAllBlocks(
+  blocks: LyricBlock[],
+  delta: number,
+  duration: number,
+): LyricBlock[] {
+  return blocks.map((b) => {
+    if (b.locked) return b;
+    const s = clamp(r3(b.startTime + delta), 0, Math.max(0, duration - MIN_BLOCK_DURATION));
+    const e = clamp(r3(b.endTime + delta), s + MIN_BLOCK_DURATION, duration || b.endTime + delta);
+    return { ...b, ...retimeBlock(b, s, e, "move") } as LyricBlock;
+  });
+}
+
+/**
+ * Karaoke look: hold each line on screen until the next one starts (bounded).
+ * Without this, lines pop out and the screen goes blank between phrases.
+ */
+export function extendBlocksToNextLine(
+  blocks: LyricBlock[],
+  maxHold = 1.6,
+  duration = 0,
+): LyricBlock[] {
+  const sorted = sortBlocks(blocks);
+  return sorted.map((b, i) => {
+    const nextStart = i + 1 < sorted.length ? sorted[i + 1].startTime : duration || b.endTime;
+    const gap = nextStart - b.endTime;
+    if (gap <= 0.02) return b;
+    return { ...b, endTime: r3(b.endTime + Math.min(gap, maxHold)) };
+  });
+}
+
+/** One-click repair for imported / hand-edited timelines. */
+export function repairTimeline(
+  blocks: LyricBlock[],
+  duration: number,
+  opts: { holdLines?: boolean; fillWords?: boolean } = {},
+): LyricBlock[] {
+  let out = sortBlocks(blocks).map((b) => {
+    const start = clamp(r3(b.startTime), 0, Math.max(0, duration - MIN_BLOCK_DURATION));
+    const end = clamp(r3(b.endTime), start + MIN_BLOCK_DURATION, duration || b.endTime);
+    let words = b.words.length ? b.words : distributeWords(b.text, start, end);
+    words = words
+      .map((w) => ({
+        ...w,
+        start: clamp(r3(w.start), start, end),
+        end: clamp(r3(w.end), start + MIN_WORD_DURATION, end),
+      }))
+      .filter((w) => w.word.trim().length > 0 && w.end > w.start);
+    return { ...b, startTime: start, endTime: end, words };
+  });
+
+  // de-overlap without warping words
+  for (let i = 1; i < out.length; i++) {
+    if (out[i].startTime < out[i - 1].endTime) {
+      out[i - 1] = { ...out[i - 1], endTime: r3(out[i].startTime) };
+    }
+  }
+
+  if (opts.holdLines !== false) out = extendBlocksToNextLine(out, 1.6, duration);
+  if (opts.fillWords !== false) {
+    out = out.map((b) => ({ ...b, words: fillWordGaps(b.words, b.endTime) }));
   }
   return out;
 }
@@ -12886,7 +13245,6 @@ export function snap(time: number, grid: number, enabled: boolean): number {
   return Math.round(time / grid) * grid;
 }
 
-/** Snap to the nearest interesting time (word edge / block edge) within tolerance. */
 export function magneticSnap(time: number, candidates: number[], tolerance: number): number {
   let best = time;
   let bestD = tolerance;
@@ -12900,6 +13258,15 @@ export function magneticSnap(time: number, candidates: number[], tolerance: numb
   return best;
 }
 
+export function collectSnapPoints(blocks: LyricBlock[]): number[] {
+  const pts: number[] = [0];
+  for (const b of blocks) {
+    pts.push(b.startTime, b.endTime);
+    for (const w of b.words) pts.push(w.start, w.end);
+  }
+  return pts;
+}
+
 export function formatTimecode(seconds: number, showMs = true): string {
   const s = Math.max(0, seconds);
   const m = Math.floor(s / 60);
@@ -12907,6 +13274,289 @@ export function formatTimecode(seconds: number, showMs = true): string {
   const cs = Math.floor((s % 1) * 100);
   const base = `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
   return showMs ? `${base}.${String(cs).padStart(2, "0")}` : base;
+}
+
+
+================================================================================
+FILE: src\lib\vad.ts
+================================================================================
+/**
+ * Offline audio listening pass.
+ *
+ * Produces the information the aligner needs in order to place lyrics on
+ * *real* vocal onsets instead of trusting Whisper's word offsets blindly:
+ *
+ *   - RMS / bass / vocal-band energy envelopes at 100 Hz
+ *   - voice-activity regions with hysteresis + minimum-duration smoothing
+ *   - onset times (region starts + internal energy jumps)
+ *   - noise floor and a rough BPM from the onset envelope
+ *
+ * Everything here is deterministic: identical input gives identical output in
+ * the editor and in the exporter.
+ */
+
+export type VadRegion = { start: number; end: number; peak: number };
+
+export type AudioAnalysis = {
+  duration: number;
+  frameRate: number;
+  rms: Float32Array;
+  bass: Float32Array;
+  /** ~300–3500 Hz energy — tracks vocals far better than full-band RMS */
+  voice: Float32Array;
+  voiced: Uint8Array;
+  regions: VadRegion[];
+  onsets: number[];
+  noiseFloor: number;
+  bpm: number;
+};
+
+const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
+
+function onePoleAlpha(cutoffHz: number, sampleRate: number) {
+  return 1 - Math.exp((-2 * Math.PI * cutoffHz) / sampleRate);
+}
+
+function percentile(sorted: Float32Array, p: number) {
+  if (!sorted.length) return 0;
+  const i = clamp(Math.floor(p * (sorted.length - 1)), 0, sorted.length - 1);
+  return sorted[i];
+}
+
+function normalise(a: Float32Array) {
+  let max = 1e-9;
+  for (let i = 0; i < a.length; i++) if (a[i] > max) max = a[i];
+  for (let i = 0; i < a.length; i++) a[i] = Math.min(1, a[i] / max);
+}
+
+export function analyzeAudioBuffer(
+  buffer: AudioBuffer,
+  frameRate = 100,
+): AudioAnalysis {
+  const sr = buffer.sampleRate;
+  const len = buffer.length;
+  const channels = buffer.numberOfChannels;
+  const frameSize = Math.max(1, Math.round(sr / frameRate));
+  const frames = Math.max(1, Math.ceil(len / frameSize));
+
+  const rms = new Float32Array(frames);
+  const bass = new Float32Array(frames);
+  const voice = new Float32Array(frames);
+
+  // Pull channel refs once; mixing inline avoids allocating a mono copy.
+  const data: Float32Array[] = [];
+  for (let c = 0; c < channels; c++) data.push(buffer.getChannelData(c));
+
+  const aBass = onePoleAlpha(150, sr);
+  const aLowVoice = onePoleAlpha(280, sr); // removes bass/kick
+  const aHighVoice = onePoleAlpha(3600, sr); // removes hats/air
+
+  let lpBass = 0;
+  let lpLow = 0;
+  let lpHigh = 0;
+
+  for (let f = 0; f < frames; f++) {
+    const off = f * frameSize;
+    const n = Math.min(frameSize, len - off);
+    let sRms = 0;
+    let sBass = 0;
+    let sVoice = 0;
+
+    for (let i = 0; i < n; i++) {
+      let x = 0;
+      for (let c = 0; c < channels; c++) x += data[c][off + i];
+      x /= channels;
+
+      lpBass += (x - lpBass) * aBass;
+      lpLow += (x - lpLow) * aLowVoice;
+      const hp = x - lpLow; // > ~280 Hz
+      lpHigh += (hp - lpHigh) * aHighVoice; // band-limited ~280–3600 Hz
+
+      sRms += x * x;
+      sBass += lpBass * lpBass;
+      sVoice += lpHigh * lpHigh;
+    }
+
+    const inv = 1 / Math.max(1, n);
+    rms[f] = Math.sqrt(sRms * inv);
+    bass[f] = Math.sqrt(sBass * inv);
+    voice[f] = Math.sqrt(sVoice * inv);
+  }
+
+  normalise(rms);
+  normalise(bass);
+  normalise(voice);
+
+  // ---- noise floor + hysteresis thresholds -------------------------------
+  const sorted = Float32Array.from(voice).sort();
+  const noiseFloor = percentile(sorted, 0.15);
+  const p95 = percentile(sorted, 0.95);
+  const span = Math.max(1e-4, p95 - noiseFloor);
+  const thrHigh = noiseFloor + span * 0.18;
+  const thrLow = noiseFloor + span * 0.08;
+
+  const voiced = new Uint8Array(frames);
+  let open = false;
+  for (let f = 0; f < frames; f++) {
+    const v = voice[f];
+    if (!open && v >= thrHigh) open = true;
+    else if (open && v < thrLow) open = false;
+    voiced[f] = open ? 1 : 0;
+  }
+
+  // ---- minimum-duration smoothing ---------------------------------------
+  const minSpeech = Math.round(0.12 * frameRate);
+  const minGap = Math.round(0.18 * frameRate);
+
+  // close short gaps first
+  let f = 0;
+  while (f < frames) {
+    if (voiced[f] === 0) {
+      let e = f;
+      while (e < frames && voiced[e] === 0) e++;
+      const gapPrecededAndFollowed = f > 0 && e < frames;
+      if (gapPrecededAndFollowed && e - f < minGap) {
+        for (let i = f; i < e; i++) voiced[i] = 1;
+      }
+      f = e;
+    } else f++;
+  }
+  // then drop short blips
+  f = 0;
+  while (f < frames) {
+    if (voiced[f] === 1) {
+      let e = f;
+      while (e < frames && voiced[e] === 1) e++;
+      if (e - f < minSpeech) for (let i = f; i < e; i++) voiced[i] = 0;
+      f = e;
+    } else f++;
+  }
+
+  // ---- regions ----------------------------------------------------------
+  const regions: VadRegion[] = [];
+  f = 0;
+  while (f < frames) {
+    if (voiced[f] === 1) {
+      let e = f;
+      let peak = 0;
+      while (e < frames && voiced[e] === 1) {
+        if (voice[e] > peak) peak = voice[e];
+        e++;
+      }
+      regions.push({
+        start: f / frameRate,
+        end: e / frameRate,
+        peak,
+      });
+      f = e;
+    } else f++;
+  }
+
+  // ---- onsets: region starts + internal spectral-flux style jumps -------
+  const onsetSet = new Set<number>();
+  for (const r of regions) onsetSet.add(Math.round(r.start * 1000) / 1000);
+
+  const fluxGuard = Math.round(0.09 * frameRate);
+  let lastOnsetFrame = -fluxGuard;
+  for (let i = 2; i < frames; i++) {
+    if (!voiced[i]) continue;
+    const prev = Math.max(voice[i - 1], voice[i - 2]);
+    const rising = voice[i] - prev;
+    if (
+      rising > span * 0.14 &&
+      voice[i] > thrHigh &&
+      i - lastOnsetFrame >= fluxGuard
+    ) {
+      onsetSet.add(Math.round((i / frameRate) * 1000) / 1000);
+      lastOnsetFrame = i;
+    }
+  }
+  const onsets = Array.from(onsetSet).sort((a, b) => a - b);
+
+  // ---- rough BPM from onset envelope autocorrelation --------------------
+  const bpm = estimateBpm(rms, frameRate);
+
+  return {
+    duration: buffer.duration,
+    frameRate,
+    rms,
+    bass,
+    voice,
+    voiced,
+    regions,
+    onsets,
+    noiseFloor,
+    bpm,
+  };
+}
+
+function estimateBpm(env: Float32Array, frameRate: number): number {
+  const n = env.length;
+  if (n < frameRate * 4) return 96;
+
+  // half-wave rectified difference = onset strength
+  const flux = new Float32Array(n);
+  let mean = 0;
+  for (let i = 1; i < n; i++) {
+    const d = env[i] - env[i - 1];
+    flux[i] = d > 0 ? d : 0;
+    mean += flux[i];
+  }
+  mean /= n;
+  for (let i = 0; i < n; i++) flux[i] = Math.max(0, flux[i] - mean);
+
+  const minLag = Math.round((60 / 190) * frameRate);
+  const maxLag = Math.round((60 / 55) * frameRate);
+  let bestLag = minLag;
+  let bestScore = -Infinity;
+
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let s = 0;
+    for (let i = lag; i < n; i++) s += flux[i] * flux[i - lag];
+    // mild preference for 90–140 bpm so we don't lock onto half/double time
+    const bpmAt = (60 * frameRate) / lag;
+    const prior = 1 - Math.min(1, Math.abs(bpmAt - 112) / 150) * 0.25;
+    const score = (s / (n - lag)) * prior;
+    if (score > bestScore) {
+      bestScore = score;
+      bestLag = lag;
+    }
+  }
+  return clamp(Math.round((60 * frameRate) / bestLag), 50, 200);
+}
+
+/** Nearest onset to `t` within `tolerance` seconds, or null. */
+export function snapToOnset(
+  onsets: number[],
+  t: number,
+  tolerance = 0.32,
+): number | null {
+  if (!onsets.length) return null;
+  let lo = 0;
+  let hi = onsets.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (onsets[mid] < t) lo = mid + 1;
+    else hi = mid;
+  }
+  let best: number | null = null;
+  let bestD = tolerance;
+  for (let i = Math.max(0, lo - 2); i <= Math.min(onsets.length - 1, lo + 2); i++) {
+    const d = Math.abs(onsets[i] - t);
+    if (d < bestD) {
+      bestD = d;
+      best = onsets[i];
+    }
+  }
+  return best;
+}
+
+/** Is the whole span [a,b] silent (no voiced frame)? Used to detect breaks. */
+export function isSilentSpan(a: AudioAnalysis, from: number, to: number) {
+  const s = Math.max(0, Math.floor(from * a.frameRate));
+  const e = Math.min(a.voiced.length, Math.ceil(to * a.frameRate));
+  for (let i = s; i < e; i++) if (a.voiced[i]) return false;
+  return true;
 }
 
 
@@ -13809,6 +14459,10 @@ export type WordTimestamp = {
   word: string;
   start: number;
   end: number;
+  /** 0..1 — how sure the aligner is about this word's position. */
+  confidence?: number;
+  /** true when the timestamp came from a real Whisper match (not interpolated). */
+  anchored?: boolean;
 };
 
 export type LyricBlockStyle = {
@@ -13828,20 +14482,25 @@ export type LyricBlockStyle = {
   italic: boolean;
   uppercase: boolean;
   align: "left" | "center" | "right";
+  letterSpacing?: number;
+  lineHeight?: number;
   gradient?: { enabled: boolean; from: string; to: string; angle: number };
-  backgroundBox?: { enabled: boolean; color: string; opacity: number; padding: number; radius: number };
+  backgroundBox?: {
+    enabled: boolean;
+    color: string;
+    opacity: number;
+    padding: number;
+    radius: number;
+  };
 };
 
-/** Any animation preset ID from ANIMATION_PRESETS, or a legacy camelCase name, or "none". */
 export type LyricAnimationIn = string;
-
-/** Any animation preset ID from ANIMATION_PRESETS, or a legacy camelCase name, or "none". */
 export type LyricAnimationOut = string;
 
 export type LyricAnimation = {
   in: LyricAnimationIn;
   out: LyricAnimationOut;
-  durationIn: number; // seconds
+  durationIn: number;
   durationOut: number;
   customCSS: string | null;
   staggerWords: boolean;
@@ -13857,9 +14516,144 @@ export type LyricBlock = {
   animation: LyricAnimation;
   emotion?: string;
   confidence?: number;
+  /** locked blocks are never moved by ripple/auto-adjust operations */
+  locked?: boolean;
+  /** instrumental / music-break placeholder */
+  isInstrumental?: boolean;
 };
 
-export type BackgroundAssetType = "video" | "image" | "gradient" | "particles" | "solid";
+/* ------------------------------------------------------------------ *
+ * Karaoke highlighting
+ * ------------------------------------------------------------------ */
+
+export type KaraokeMode =
+  | "off"
+  /** gradient/solid sweep left→right across the active word */
+  | "sweep"
+  /** whole word switches colour the instant it starts */
+  | "wordSwap"
+  /** sweep + colour swap + glow + pop */
+  | "both";
+
+export type KaraokeStyle = {
+  mode: KaraokeMode;
+  /** colour of the word being sung right now */
+  activeColor: string;
+  /** second stop for a gradient sweep; set equal to activeColor for flat fill */
+  activeColor2: string;
+  activeGlowColor: string;
+  /** 0..1 */
+  glowStrength: number;
+  /** words already sung */
+  sungColor: string;
+  /** keep sungColour after the word finishes (false = revert to base fill) */
+  holdSung: boolean;
+  /** words not yet reached */
+  unsungColor: string;
+  unsungOpacity: number;
+  /** extra scale punch on the active word, 0..0.4 */
+  scalePop: number;
+  /** start the highlight this many ms before the word's timestamp */
+  leadInMs: number;
+  /** underline that grows with the word */
+  underline: boolean;
+  underlineColor: string;
+  underlineThickness: number;
+};
+
+export const DEFAULT_KARAOKE_STYLE: KaraokeStyle = {
+  mode: "both",
+  activeColor: "#FFD60A",
+  activeColor2: "#FF7A18",
+  activeGlowColor: "#FFD60A",
+  glowStrength: 0.85,
+  sungColor: "#FFFFFF",
+  holdSung: true,
+  unsungColor: "#FFFFFF",
+  unsungOpacity: 0.42,
+  scalePop: 0.08,
+  leadInMs: 0,
+  underline: false,
+  underlineColor: "#FFD60A",
+  underlineThickness: 4,
+};
+
+/* ------------------------------------------------------------------ *
+ * Karaoke scene (background image + cover art + scrolling lyrics)
+ * ------------------------------------------------------------------ */
+
+export type KaraokeSceneSettings = {
+  enabled: boolean;
+  backgroundUrl: string | null;
+  backgroundName?: string | null;
+  coverUrl: string | null;
+  coverName?: string | null;
+  title: string;
+  artist: string;
+  /** 0..40 px at 1080p */
+  backgroundBlur: number;
+  /** 0..1 */
+  backgroundDim: number;
+  /** ken-burns drift amount, 0..0.15 */
+  backgroundZoom: number;
+  showCover: boolean;
+  /** cover height as % of frame height */
+  coverSize: number;
+  coverRadius: number;
+  coverGlow: boolean;
+  layout: "cover-left" | "cover-top" | "lyrics-only";
+  /** how many lyric lines are visible in the scroll column */
+  linesVisible: number;
+  lineGap: number;
+  /** where the active line sits vertically, % of height */
+  focusY: number;
+  /** seconds the scroll takes to settle on a new line */
+  scrollSettle: number;
+  activeLineScale: number;
+  /** opacity of lines above/below the active one */
+  pastOpacity: number;
+  futureOpacity: number;
+  showProgressBar: boolean;
+  showCountdown: boolean;
+  accentColor: string;
+  panelOpacity: number;
+};
+
+export const DEFAULT_KARAOKE_SCENE: KaraokeSceneSettings = {
+  enabled: false,
+  backgroundUrl: null,
+  backgroundName: null,
+  coverUrl: null,
+  coverName: null,
+  title: "",
+  artist: "",
+  backgroundBlur: 18,
+  backgroundDim: 0.55,
+  backgroundZoom: 0.06,
+  showCover: true,
+  coverSize: 34,
+  coverRadius: 18,
+  coverGlow: true,
+  layout: "cover-left",
+  linesVisible: 5,
+  lineGap: 0.42,
+  focusY: 52,
+  scrollSettle: 0.42,
+  activeLineScale: 1.14,
+  pastOpacity: 0.28,
+  futureOpacity: 0.42,
+  showProgressBar: true,
+  showCountdown: true,
+  accentColor: "#7C3AED",
+  panelOpacity: 0.32,
+};
+
+export type BackgroundAssetType =
+  | "video"
+  | "image"
+  | "gradient"
+  | "particles"
+  | "solid";
 
 export type BackgroundAsset = {
   type: BackgroundAssetType;
@@ -13878,8 +14672,13 @@ export type Settings = {
 };
 
 export type AspectRatio = "16:9" | "9:16" | "1:1" | "4:5" | "21:9";
-
 export type Resolution = "1280x720" | "1920x1080" | "3840x2160";
+export type ParticleStyle =
+  | "dust"
+  | "stars"
+  | "rain"
+  | "fireflies"
+  | "constellation";
 
 export type AISettings = {
   karaokeEnabled: boolean;
@@ -13887,6 +14686,7 @@ export type AISettings = {
   liveCssEnabled: boolean;
   visualizerEnabled: boolean;
   particlesEnabled: boolean;
+  particleStyle: ParticleStyle;
   beatPulseEnabled: boolean;
 };
 
@@ -13906,6 +14706,9 @@ export type ProjectMeta = {
     audioDuration: number;
     aspectRatio?: AspectRatio;
     resolution?: Resolution;
+    karaokeStyle?: KaraokeStyle;
+    karaokeScene?: KaraokeSceneSettings;
+    globalOffsetMs?: number;
   };
 };
 
@@ -13915,10 +14718,17 @@ export type ProjectState = {
   audioDuration: number;
   audioName: string | null;
   audioWaveform: number[];
+  rawLyrics: string;
   backgroundAsset: BackgroundAsset | null;
   lyricBlocks: LyricBlock[];
   settings: Settings;
   aiSettings: AISettings;
+  karaokeStyle: KaraokeStyle;
+  karaokeScene: KaraokeSceneSettings;
+  /** non-destructive global nudge applied to ALL lyrics at render time (ms) */
+  globalOffsetMs: number;
+  /** measured/declared audio output latency compensation (ms) */
+  latencyMs: number;
   selectedBlockId: string | null;
   currentTime: number;
   isPlaying: boolean;
