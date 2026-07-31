@@ -1,7 +1,7 @@
 ﻿================================================================================
 CODE.TXT - COMBINED SOURCE SNAPSHOT
 Project       : lyricforge-ai-3d-landing
-Generated     : 2026-07-31 15:16:28
+Generated     : 2026-07-31 15:19:19
 Total files   : 61
 Regenerate    : .\update-code-files.ps1
 Change log    : code_log.txt
@@ -11730,22 +11730,23 @@ const SECTION_KEYWORDS = [
   "intro", "outro", "verse", "chorus", "bridge", "hook", "pre-chorus", "prechorus",
   "post-chorus", "postchorus", "interlude", "instrumental", "solo", "break", "fade",
   "ad-lib", "adlib", "refrain", "coda", "drop", "build-up", "buildup", "tag", "vamp",
+  "skit", "spoken", "part", "section", "guitar solo", "piano solo",
   // Spanish / Portuguese
-  "verso", "coro", "estribillo", "puente", "ponte", "refrão", "refrao",
+  "verso", "coro", "estribillo", "puente", "ponte", "refrão", "refrao", "introducción", "introducao", "estanza", "letra", "estrofa",
   // French / German / Italian
-  "couplet", "refrain", "strophe", "brücke", "brucke", "ritornello", "strofa",
+  "couplet", "refrain", "strophe", "brücke", "brucke", "ritornello", "strofa", "vorspiel", "nachspiel", "introduzione",
   // Turkish / Russian
-  "nakarat", "köprü", "kopru", "куплет", "припев", "бридж",
+  "nakarat", "köprü", "kopru", "giriş", "çıkış", "куплет", "припев", "бридж", "интро", "аутро", "вступление", "концовка",
   // Hindi / Punjabi
-  "मुखड़ा", "अंतरा", "कोरस", "ब्रिज",
+  "मुखड़ा", "अंतरा", "कोरस", "ब्रिज", "मुखडा", "अंतर", "संगीत",
   // Korean
-  "벌스", "코러스", "브릿지", "인트로", "아웃트로", "후렴",
+  "벌스", "코러스", "브릿지", "인트로", "아웃트로", "후렴", "간주", "절",
   // Japanese
-  "サビ", "aメロ", "bメロ", "cメロ", "イントロ", "アウトロ", "ブリッジ",
+  "サビ", "aメロ", "bメロ", "cメロ", "イントロ", "アウトロ", "ブリッジ", "間奏", "前奏", "後奏",
   // Chinese
-  "副歌", "主歌", "间奏", "前奏", "尾奏",
+  "副歌", "主歌", "间奏", "前奏", "尾奏", "过门", "主歌1", "主歌2",
   // Arabic
-  "مقطع", "لازمة", "جسر", "مقدمة",
+  "مقطع", "لازمة", "جسر", "مقدمة", "خاتمة",
 ];
 
 const BRACKET_RE = /[[({【〔]\s*([^\])}】〕]{0,60})\s*[\])}】〕]/g;
@@ -11771,7 +11772,7 @@ export function cleanLyrics(raw: string): { lines: string[]; tagsRemoved: string
   const lines: string[] = [];
 
   for (const rawLine of withoutTags.split(/\r?\n/)) {
-    const line = rawLine
+    let line = rawLine
       .replace(TIMECODE_RE, "")
       .replace(/^\s*\d+\s*$/, "")
       .replace(/\s{2,}/g, " ")
@@ -11781,8 +11782,16 @@ export function cleanLyrics(raw: string): { lines: string[]; tagsRemoved: string
     // .srt artefacts
     if (/^\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->/.test(line)) continue;
 
+    const lower = line.toLowerCase().replace(/[:\-–—]+$/, "").replace(/\s*\(?x?\s*\d+\s*\)?$/i, "").trim();
+    const isStandaloneHeader = SECTION_KEYWORDS.some((kw) => lower === kw || lower.startsWith(kw + " ") || lower.endsWith(" " + kw)) ||
+      /^(intro|verse|verso|couplet|strophe|куплет|chorus|coro|refrain|припев|サビ|副歌|主歌|bridge|ponte|puente|бридж|hook|outro|interlude|solo|part|section)\s*[:\-–—]?\s*\d*[a-c]?$/i.test(lower);
+
+    if (isStandaloneHeader) {
+      tagsRemoved.push(line);
+      continue;
+    }
+
     const key = line.toLowerCase();
-    // Collapse only *immediately* repeated identical lines (keeps hooks intact).
     if (lines.length > 0 && lines[lines.length - 1].toLowerCase() === key) continue;
     seen.add(key);
     lines.push(line);
