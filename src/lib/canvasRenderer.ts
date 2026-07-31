@@ -21,6 +21,7 @@ export type RenderOptions = {
   selectedId?: string | null;
   showGuides?: boolean;
   vignette?: boolean;
+  particleStyle?: "dust" | "stars" | "rain" | "fireflies" | "constellation";
 };
 
 export type LayoutBox = { id: string; x: number; y: number; w: number; h: number };
@@ -211,16 +212,105 @@ export function renderFrame(
 
   if (o.ai.particlesEnabled || bg.kind === "particles") {
     ctx.save();
-    const count = 90;
-    for (let i = 0; i < count; i++) {
-      const sx = rand(i * 3.1) * W;
-      const sy = (rand(i * 7.7) * H + time * (12 + rand(i) * 26) * k) % H;
-      const r = (1 + rand(i * 13.3) * 2.4) * k;
-      ctx.globalAlpha = 0.15 + rand(i * 17.1) * 0.45;
-      ctx.fillStyle = "#ffffff";
-      ctx.beginPath();
-      ctx.arc(sx, H - sy, r, 0, Math.PI * 2);
-      ctx.fill();
+    const ps = o.particleStyle ?? (o.ai as any).particleStyle ?? "dust";
+
+    if (ps === "rain") {
+      // vertical streaks
+      const count = 120;
+      for (let i = 0; i < count; i++) {
+        const sx = rand(i * 2.3) * W;
+        const speed = 180 + rand(i * 5.1) * 280;
+        const sy = (rand(i * 9.9) * H + time * speed * k) % H;
+        const len = (8 + rand(i * 3.7) * 22) * k;
+        ctx.globalAlpha = 0.12 + rand(i * 11.1) * 0.28;
+        ctx.strokeStyle = `hsl(${190 + rand(i * 7) * 40},80%,75%)`;
+        ctx.lineWidth = (0.6 + rand(i * 4.4) * 0.8) * k;
+        ctx.beginPath();
+        ctx.moveTo(sx, H - sy);
+        ctx.lineTo(sx, H - sy + len);
+        ctx.stroke();
+      }
+    } else if (ps === "stars") {
+      // coloured twinkle dots
+      const count = 80;
+      const hues = [50, 200, 270, 320, 160];
+      for (let i = 0; i < count; i++) {
+        const sx = rand(i * 3.1) * W;
+        const sy = rand(i * 7.7) * H;
+        const twinkle = 0.3 + 0.7 * Math.abs(Math.sin(time * (1.2 + rand(i) * 2.4) + i));
+        const r = (1.2 + rand(i * 13.3) * 2.8) * k;
+        ctx.globalAlpha = twinkle * (0.4 + rand(i * 17.1) * 0.5);
+        ctx.fillStyle = `hsl(${hues[i % hues.length]},90%,75%)`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (ps === "fireflies") {
+      // glowing green blobs with organic drift
+      const count = 50;
+      for (let i = 0; i < count; i++) {
+        const baseX = rand(i * 4.1) * W;
+        const baseY = rand(i * 8.3) * H;
+        const driftX = Math.sin(time * (0.4 + rand(i) * 0.6) + i * 2.1) * 60 * k;
+        const driftY = Math.cos(time * (0.3 + rand(i * 2) * 0.5) + i) * 50 * k;
+        const sx = baseX + driftX;
+        const sy = baseY + driftY;
+        const pulse = 0.4 + 0.6 * Math.abs(Math.sin(time * (1 + rand(i) * 1.5) + i * 0.7));
+        const r = (2 + rand(i * 5.5) * 3) * k;
+        ctx.save();
+        ctx.globalAlpha = pulse * 0.85;
+        ctx.shadowColor = `hsl(${100 + rand(i) * 60},100%,65%)`;
+        ctx.shadowBlur = 12 * k;
+        ctx.fillStyle = `hsl(${100 + rand(i) * 60},100%,65%)`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    } else if (ps === "constellation") {
+      // nodes connected by lines when nearby
+      const count = 40;
+      const nodes: [number, number][] = [];
+      for (let i = 0; i < count; i++) {
+        const sx = (rand(i * 3.1) * W + time * (6 + rand(i) * 10) * k) % W;
+        const sy = (rand(i * 7.7) * H + time * (4 + rand(i * 2) * 8) * k) % H;
+        nodes.push([sx, sy]);
+        ctx.globalAlpha = 0.5 + rand(i * 17.1) * 0.4;
+        ctx.fillStyle = `hsl(${280 + rand(i) * 80},80%,75%)`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, (1.5 + rand(i * 5) * 2) * k, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const threshold = 0.18 * W;
+      for (let a = 0; a < nodes.length; a++) {
+        for (let b = a + 1; b < nodes.length; b++) {
+          const dx = nodes[a][0] - nodes[b][0];
+          const dy = nodes[a][1] - nodes[b][1];
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < threshold) {
+            ctx.globalAlpha = (1 - dist / threshold) * 0.25;
+            ctx.strokeStyle = `hsl(${280 + rand(a + b) * 80},70%,70%)`;
+            ctx.lineWidth = 0.8 * k;
+            ctx.beginPath();
+            ctx.moveTo(nodes[a][0], nodes[a][1]);
+            ctx.lineTo(nodes[b][0], nodes[b][1]);
+            ctx.stroke();
+          }
+        }
+      }
+    } else {
+      // dust (default) — simple white rising dots
+      const count = 90;
+      for (let i = 0; i < count; i++) {
+        const sx = rand(i * 3.1) * W;
+        const sy = (rand(i * 7.7) * H + time * (12 + rand(i) * 26) * k) % H;
+        const r = (1 + rand(i * 13.3) * 2.4) * k;
+        ctx.globalAlpha = 0.15 + rand(i * 17.1) * 0.45;
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(sx, H - sy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     ctx.restore();
   }
