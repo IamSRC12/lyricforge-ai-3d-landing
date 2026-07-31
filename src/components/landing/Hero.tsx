@@ -95,13 +95,12 @@ export default function Hero({ stats }: { stats: LandingStats }) {
           className="pointer-events-auto mt-9 flex flex-col items-center gap-3 sm:flex-row"
         >
           <motion.a
-            href="#forge"
+            href="/studio"
             whileHover={{ scale: 1.035 }}
             whileTap={{ scale: 0.97 }}
-            className="group inline-flex items-center gap-2 rounded-[10px] bg-gradient-to-r from-forge-primary via-[#6d4aef] to-forge-secondary px-7 py-3.5 text-[15px] font-semibold text-white shadow-[0_0_28px_rgba(124,58,237,0.45)] transition"
+            className="inline-flex items-center justify-center gap-2.5 rounded-[8px] bg-gradient-to-r from-forge-primary via-forge-secondary to-forge-accent px-6 py-3.5 text-[15px] font-semibold text-white shadow-[0_0_36px_rgba(124,58,237,0.4)] transition hover:brightness-110"
           >
-            Start creating
-            <ArrowRight className="size-4 transition-transform duration-200 group-hover:translate-x-1" />
+            Launch Studio App →
           </motion.a>
           <motion.a
             href="#pipeline"
