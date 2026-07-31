@@ -1,0 +1,342 @@
+5. src/lib/alignLyrics.ts (onset-aware, gap-free)
+Copyimport type { GroqTranscriptionResult, GroqWord } from "./groq";
+import type { LyricBlock, WordTimestamp } from "@/types/project";
+import { defaultAnimation, defaultStyle } from "@/store/useLyricStore";
+import { snapToOnset, type AudioAnalysis } from "./vad";
+import {
+  fillWordGaps,
+  extendBlocksToNextLine,
+  MIN_BLOCK_DURATION,
+  r3,
+} from "./timeUtils";
+
+type FlatLyricWord = {
+  original: string;
+  normalized: string;
+  blockIndex: number;
+  syllables: number;
+};
+
+export type AlignmentResult = {
+  blocks: LyricBlock[];
+  confidence: number;
+  matchedWords: number;
+  totalWords: number;
+  warning?: string;
+  /** how far, on average, the aligner had to move block starts to hit onsets */
+  onsetCorrectionMs: number;
+};
+
+export type AlignOptions = {
+  /** listening pass — enables onset snapping and silence-aware line holds */
+  analysis?: AudioAnalysis | null;
+  /** hold each line until the next one begins (karaoke look) */
+  holdLines?: boolean;
+  /** max seconds a line may be held past its last word */
+  maxLineHold?: number;
+  /** onset snap tolerance, seconds */
+  onsetTolerance?: number;
+};
+
+function createId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `aligned_${crypto.randomUUID()}`;
+  }
+  return `aligned_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function estimateSyllableCount(word: string): number {
+  const clean = word.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  if (!clean) return 1;
+  if (/[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]/.test(clean)) {
+    return Math.max(1, clean.length);
+  }
+  const vowels = clean.match(/[aeiouyàáâäãåèéêëìíîïòóôöõùúûüýÿ]+/g);
+  let count = vowels ? vowels.length : Math.ceil(clean.length / 3);
+  if (/[^aeiouy]e$/.test(clean) && count > 1) count -= 1;
+  return Math.max(1, count);
+}
+
+function normalizeToken(token: string): string {
+  return token
+    .normalize("NFKD")
+    .toLocaleLowerCase()
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’‘]/g, "'")
+    .replace(/[^\p{L}\p{N}']/gu, "")
+    .replace(/^'+|'+$/g, "");
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const prev = new Array<number>(b.length + 1);
+  const cur = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const sub = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + sub);
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = cur[j];
+  }
+  return prev[b.length];
+}
+
+function tokenSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const na = a.replace(/'/g, "");
+  const nb = b.replace(/'/g, "");
+  if (na === nb) return 0.98;
+  if (a.length >= 3 && b.length >= 3 && (a.startsWith(b) || b.startsWith(a))) return 0.88;
+  const longest = Math.max(a.length, b.length);
+  if (!longest) return 0;
+  return Math.max(0, 1 - editDistance(a, b) / longest);
+}
+
+function sanitizeWhisperWords(words: GroqWord[]): GroqWord[] {
+  return words
+    .map((w) => {
+      const start = Math.max(0, Number(w.start) || 0);
+      const rawEnd = Number(w.end);
+      const end = Number.isFinite(rawEnd) ? Math.max(start + 0.02, rawEnd) : start + 0.12;
+      return { word: String(w.word || "").trim(), start, end };
+    })
+    .filter(
+      (w) =>
+        w.word.length > 0 &&
+        normalizeToken(w.word).length > 0 &&
+        Number.isFinite(w.start) &&
+        Number.isFinite(w.end),
+    )
+    .sort((a, b) => a.start - b.start);
+}
+
+function flattenLyrics(blockTexts: string[]): FlatLyricWord[] {
+  const result: FlatLyricWord[] = [];
+  blockTexts.forEach((text, blockIndex) => {
+    for (const word of text.split(/\s+/).filter(Boolean)) {
+      const normalized = normalizeToken(word);
+      if (!normalized) continue;
+      result.push({
+        original: word,
+        normalized,
+        blockIndex,
+        syllables: estimateSyllableCount(word),
+      });
+    }
+  });
+  return result;
+}
+
+/* ------------------------------------------------------------------ *
+ * DTW / Levenshtein hybrid — the user's lyrics are the source of truth,
+ * the transcript is only a time grid.
+ * ------------------------------------------------------------------ */
+
+function createWordMapping(
+  lyricWords: FlatLyricWord[],
+  whisperWords: GroqWord[],
+): Array<number | null> {
+  const L = lyricWords.length;
+  const Wn = whisperWords.length;
+  if (!L || !Wn) return new Array<number | null>(L).fill(null);
+
+  const width = Wn + 1;
+  const directions = new Uint8Array((L + 1) * width);
+
+  let previous = new Float64Array(width);
+  let current = new Float64Array(width);
+
+  previous[0] = 0;
+  for (let j = 1; j <= Wn; j++) {
+    previous[j] = previous[j - 1] - 0.1;
+    directions[j] = 3;
+  }
+
+  const whisperNorm = whisperWords.map((w) => normalizeToken(w.word));
+
+  for (let i = 1; i <= L; i++) {
+    current[0] = previous[0] - 1.1;
+    directions[i * width] = 2;
+    const lyricToken = lyricWords[i - 1].normalized;
+
+    for (let j = 1; j <= Wn; j++) {
+      const sim = tokenSimilarity(lyricToken, whisperNorm[j - 1]);
+      const diag =
+        previous[j - 1] +
+        (sim >= 0.98 ? 3.5 : sim >= 0.82 ? 2.0 : sim >= 0.62 ? 0.5 : -1.0);
+      const skipLyric = previous[j] - 1.1;
+      const skipWhisper = current[j - 1] - 0.1;
+
+      if (diag >= skipLyric && diag >= skipWhisper) {
+        current[j] = diag;
+        directions[i * width + j] = 1;
+      } else if (skipLyric >= skipWhisper) {
+        current[j] = skipLyric;
+        directions[i * width + j] = 2;
+      } else {
+        current[j] = skipWhisper;
+        directions[i * width + j] = 3;
+      }
+    }
+
+    const swap = previous;
+    previous = current;
+    current = swap;
+    current.fill(0);
+  }
+
+  const mapping = new Array<number | null>(L).fill(null);
+  let i = L;
+  let j = Wn;
+  while (i > 0 || j > 0) {
+    const dir = directions[i * width + j];
+    if (dir === 1 && i > 0 && j > 0) {
+      const sim = tokenSimilarity(lyricWords[i - 1].normalized, whisperNorm[j - 1]);
+      if (sim >= 0.58) mapping[i - 1] = j - 1;
+      i--;
+      j--;
+    } else if (dir === 2 && i > 0) i--;
+    else if (dir === 3 && j > 0) j--;
+    else if (i > 0) i--;
+    else j--;
+  }
+  return mapping;
+}
+
+const prevMapped = (m: Array<number | null>, i: number) => {
+  for (let k = i - 1; k >= 0; k--) if (m[k] !== null) return k;
+  return -1;
+};
+const nextMapped = (m: Array<number | null>, i: number) => {
+  for (let k = i + 1; k < m.length; k++) if (m[k] !== null) return k;
+  return -1;
+};
+
+function buildInterpolatedTimestamps(
+  lyricWords: FlatLyricWord[],
+  whisperWords: GroqWord[],
+  mapping: Array<number | null>,
+  duration: number,
+): WordTimestamp[] {
+  const safeDuration = Math.max(
+    duration,
+    whisperWords[whisperWords.length - 1]?.end || 0,
+    lyricWords.length * 0.2,
+    1,
+  );
+
+  const out: WordTimestamp[] = lyricWords.map((lw, index) => {
+    const mapped = mapping[index];
+
+    if (mapped !== null) {
+      const m = whisperWords[mapped];
+      return {
+        word: lw.original,
+        start: m.start,
+        end: Math.max(m.start + 0.03, m.end),
+        confidence: 0.97,
+        anchored: true,
+      };
+    }
+
+    const pi = prevMapped(mapping, index);
+    const ni = nextMapped(mapping, index);
+
+    if (pi >= 0 && ni >= 0) {
+      const pw = mapping[pi]!;
+      const nw = mapping[ni]!;
+      const rangeStart = whisperWords[pw].end;
+      const rangeEnd = whisperWords[nw].start;
+
+      let totalSyl = 0;
+      let elapsedSyl = 0;
+      for (let k = pi + 1; k < ni; k++) {
+        const syl = lyricWords[k].syllables || 1;
+        totalSyl += syl;
+        if (k < index) elapsedSyl += syl;
+      }
+      const mySyl = lw.syllables || 1;
+      const gapWords = Math.max(1, ni - pi - 1);
+      const available = Math.max(0.05 * gapWords, rangeEnd - rangeStart);
+      const startFrac = totalSyl > 0 ? elapsedSyl / totalSyl : 0;
+      const durFrac = totalSyl > 0 ? mySyl / totalSyl : 1 / gapWords;
+
+      const start = rangeStart + startFrac * available;
+      const span = Math.max(0.06, durFrac * available * 0.94);
+      return {
+        word: lw.original,
+        start,
+        end: Math.min(rangeEnd, start + span),
+        confidence: 0.6,
+        anchored: false,
+      };
+    }
+
+    if (pi >= 0) {
+      const pw = mapping[pi]!;
+      const offset = index - pi;
+      const start = whisperWords[pw].end + (offset - 1) * 0.22;
+      return {
+        word: lw.original,
+        start: Math.min(safeDuration, start),
+        end: Math.min(safeDuration, start + 0.2),
+        confidence: 0.35,
+        anchored: false,
+      };
+    }
+
+    if (ni >= 0) {
+      const nw = mapping[ni]!;
+      const dist = ni - index;
+      const end = Math.max(0.05, whisperWords[nw].start - (dist - 1) * 0.22);
+      return {
+        word: lw.original,
+        start: Math.max(0, end - 0.2),
+        end,
+        confidence: 0.35,
+        anchored: false,
+      };
+    }
+
+    const slot = safeDuration / Math.max(1, lyricWords.length);
+    const start = index * slot;
+    return {
+      word: lw.original,
+      start,
+      end: Math.min(safeDuration, start + Math.max(0.06, slot * 0.85)),
+      confidence: 0.2,
+      anchored: false,
+    };
+  });
+
+  // enforce monotonic starts without crushing anything
+  let cursor = 0;
+  return out.map((w) => {
+    const start = Math.max(cursor, w.start);
+    const end = Math.max(start + 0.03, w.end);
+    cursor = start + 0.001;
+    return {
+      ...w,
+      start: r3(Math.min(start, safeDuration)),
+      end: r3(Math.min(Math.max(start + 0.03, end), safeDuration)),
+    };
+  });
+}
+
+/* ------------------------------------------------------------------ */
+
+export function alignLyricsToWhisper(
+  blockTexts: string[],
+  whisperResult: GroqTranscriptionResult,
+  audioDuration: number,
+  options: AlignOptions = {},
+): AlignmentResult {
+  const cleanBlocks = blockTexts.map((b) => b.trim(
+<truncated 84346 bytes>
+
+NOTE: The output was truncated because it was too long. Use a more targeted query or a smaller range to get the information you need.
