@@ -1,7 +1,8 @@
 import { useLyricStore } from "@/store/useLyricStore";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { loadCustomFont } from "@/lib/audioUtils";
 import type { LyricBlockStyle, LyricAnimationIn, LyricAnimationOut, AISettings } from "@/types/project";
+import { ANIMATION_PRESETS, PRESET_CATEGORIES, type PresetCategory } from "@/lib/animation-presets";
 
 const FONTS = [
   "Inter",
@@ -18,31 +19,6 @@ const FONTS = [
   "General Sans",
 ];
 
-const ANIM_IN: LyricAnimationIn[] = [
-  "fade",
-  "pop",
-  "slideUp",
-  "slideDown",
-  "slideLeft",
-  "slideRight",
-  "zoom",
-  "typewriter",
-  "bounce",
-  "glitch",
-  "kinetic",
-  "none",
-];
-
-const ANIM_OUT: LyricAnimationOut[] = [
-  "fade",
-  "pop",
-  "slideUp",
-  "slideDown",
-  "slideLeft",
-  "slideRight",
-  "zoom",
-  "none",
-];
 
 type StyleTemplate = {
   name: string;
@@ -154,6 +130,19 @@ export function PropertiesPanel() {
   const selected = lyricBlocks.find((b) => b.id === selectedBlockId);
   const [customFonts, setCustomFonts] = useState<string[]>([]);
   const [fontError, setFontError] = useState<string | null>(null);
+  const [animPickerTarget, setAnimPickerTarget] = useState<"in" | "out" | null>(null);
+  const [animCategory, setAnimCategory] = useState<PresetCategory | "all">("all");
+  const [hoveredPreset, setHoveredPreset] = useState<string | null>(null);
+
+  const presetKeyframeSheet = useMemo(
+    () => ANIMATION_PRESETS.map((pr) => `@keyframes lf-${pr.id}{${pr.keyframes}}`).join("\n"),
+    [],
+  );
+
+  const visiblePresets = useMemo(
+    () => animCategory === "all" ? ANIMATION_PRESETS : ANIMATION_PRESETS.filter((pr) => pr.category === animCategory),
+    [animCategory],
+  );
 
   const handleFontUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -203,6 +192,7 @@ export function PropertiesPanel() {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto pr-1">
+      <style dangerouslySetInnerHTML={{ __html: presetKeyframeSheet }} />
       {/* Background */}
       <div className="rounded-[16px] border border-white/10 bg-[#14141C] p-4">
         <div className="mb-3 flex items-center justify-between">
@@ -580,44 +570,127 @@ export function PropertiesPanel() {
 
           <div className="rounded-[16px] border border-white/10 bg-[#14141C] p-4">
             <h3 className="mb-3 text-[11px] font-bold uppercase tracking-widest text-white/60">Animation</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[11px] text-white/50">In</label>
-                <select
-                  value={selected.animation.in}
-                  onChange={(e) => {
-                    pushHistory();
-                    updateBlockAnimation(selected.id, { in: e.target.value as LyricAnimationIn });
-                  }}
-                  className="mt-1 w-full rounded-lg border border-white/10 bg-black/50 px-2 py-2 text-xs text-white"
-                >
-                  {ANIM_IN.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-              </div>
 
-              <div>
-                <label className="text-[11px] text-white/50">Out</label>
-                <select
-                  value={selected.animation.out}
-                  onChange={(e) => {
-                    pushHistory();
-                    updateBlockAnimation(selected.id, { out: e.target.value as LyricAnimationOut });
-                  }}
-                  className="mt-1 w-full rounded-lg border border-white/10 bg-black/50 px-2 py-2 text-xs text-white"
-                >
-                  {ANIM_OUT.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            {/* In / Out selector buttons */}
+            <div className="grid grid-cols-2 gap-2">
+              {(["in", "out"] as const).map((dir) => {
+                const currentAnim = dir === "in" ? selected.animation.in : selected.animation.out;
+                const isOpen = animPickerTarget === dir;
+                return (
+                  <div key={dir}>
+                    <label className="text-[11px] text-white/50 capitalize">{dir}</label>
+                    <button
+                      type="button"
+                      onClick={() => setAnimPickerTarget(isOpen ? null : dir)}
+                      className={`mt-1 flex w-full items-center justify-between gap-1 rounded-lg border px-2 py-2 text-left text-xs transition ${
+                        isOpen
+                          ? "border-white/40 bg-white/10 text-white"
+                          : "border-white/10 bg-black/50 text-white/70 hover:border-white/20"
+                      }`}
+                    >
+                      <span className="truncate">{currentAnim || "none"}</span>
+                      <span className="shrink-0 text-[10px] text-white/40">{isOpen ? "▲" : "▼"}</span>
+                    </button>
+                  </div>
+                );
+              })}
             </div>
 
+            {/* Visual preset picker */}
+            {animPickerTarget && (
+              <div className="mt-2 overflow-hidden rounded-xl border border-white/10 bg-[#0C0C16]">
+                {/* Category tabs */}
+                <div className="flex flex-wrap gap-1 border-b border-white/5 p-2">
+                  {PRESET_CATEGORIES.map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setAnimCategory(cat.id)}
+                      className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium transition ${
+                        animCategory === cat.id
+                          ? "bg-white/20 text-white"
+                          : "text-white/40 hover:text-white/70"
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Preset grid */}
+                <div className="grid max-h-[320px] grid-cols-2 gap-1.5 overflow-y-auto p-2">
+                  {/* None option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      pushHistory();
+                      updateBlockAnimation(selected.id, { [animPickerTarget]: "none" } as any);
+                      setAnimPickerTarget(null);
+                    }}
+                    className={`rounded-lg border p-2 text-left transition ${
+                      (animPickerTarget === "in" ? selected.animation.in : selected.animation.out) === "none"
+                        ? "border-white/50 bg-white/10"
+                        : "border-white/5 bg-white/[0.02] hover:border-white/20"
+                    }`}
+                  >
+                    <div className="grid h-9 place-items-center rounded bg-white/5 text-sm text-white/30">—</div>
+                    <div className="mt-1 text-[10px] font-medium text-white">None</div>
+                    <div className="text-[9px] text-white/30">no animation</div>
+                  </button>
+
+                  {visiblePresets.map((preset) => {
+                    const currentVal = animPickerTarget === "in" ? selected.animation.in : selected.animation.out;
+                    const isActive = currentVal === preset.id;
+                    const isHovered = hoveredPreset === preset.id;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onMouseEnter={() => setHoveredPreset(preset.id)}
+                        onMouseLeave={() => setHoveredPreset(null)}
+                        onClick={() => {
+                          pushHistory();
+                          updateBlockAnimation(selected.id, { [animPickerTarget]: preset.id } as any);
+                          setAnimPickerTarget(null);
+                        }}
+                        className={`rounded-lg border p-2 text-left transition ${
+                          isActive
+                            ? "border-purple-400/60 bg-purple-500/15"
+                            : "border-white/5 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.05]"
+                        }`}
+                      >
+                        <div className="grid h-9 place-items-center overflow-hidden rounded bg-[radial-gradient(circle_at_50%_60%,rgba(124,58,237,0.25),transparent)]">
+                          <span
+                            key={`${preset.id}-${isHovered}`}
+                            style={{
+                              animation: isHovered
+                                ? `lf-${preset.id} ${preset.duration || 1.4}s ${preset.easing} infinite`
+                                : undefined,
+                              ...(preset.id === "karaoke-fill"
+                                ? {
+                                    backgroundImage: "linear-gradient(90deg,#06b6d4,#a78bfa)",
+                                    backgroundClip: "text",
+                                    WebkitBackgroundClip: "text",
+                                    color: "transparent",
+                                    backgroundSize: "100% 100%",
+                                  }
+                                : {}),
+                            }}
+                            className="text-sm font-bold text-white will-change-transform"
+                          >
+                            Aa
+                          </span>
+                        </div>
+                        <div className="mt-1 truncate text-[10px] font-medium text-white">{preset.name}</div>
+                        <div className="truncate text-[9px] text-white/30">{preset.detail}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Duration controls */}
             <div className="mt-3 grid grid-cols-2 gap-3">
               <div>
                 <label className="text-[11px] text-white/50">Duration In (s)</label>
