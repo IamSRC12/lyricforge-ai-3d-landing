@@ -27,11 +27,13 @@ export const MULTI_LANG_STRUCTURAL_KEYWORDS: string[] = [
   // Italian
   "strofa", "ritornello", "ponte", "introduzione",
 
-  // Turkish
+  // Turkish / Central Asian / Azerbaijani
   "nakarat", "köprü", "kopru", "giriş", "giris", "çıkış", "cikis",
+  "kuplet", "kuple", "band", "kiriş", "kiris", "chiqish", "nakorat", "tashqi", "boshlanishi", "tugashi",
 
-  // Russian
+  // Russian / Ukrainian / Belarussian
   "куплет", "припев", "бридж", "интро", "аутро", "вступление", "концовка", "соло",
+  "заспів", "приспів", "вступ", "кінець",
 
   // Hindi / Punjabi
   "मुखड़ा", "अंतरा", "कोरस", "ब्रिज", "मुखडा", "अंतर", "संगीत",
@@ -40,7 +42,7 @@ export const MULTI_LANG_STRUCTURAL_KEYWORDS: string[] = [
   "벌스", "코러스", "브릿지", "인트로", "아웃트로", "후렴", "간주", "절",
 
   // Japanese
-  "サビ", "aメロ", "bメメロ", "cメロ", "イントロ", "アウトロ", "ブリッジ", "間奏", "前奏", "後奏",
+  "サビ", "aメロ", "bメロ", "cメロ", "イントロ", "アウトロ", "ブリッジ", "間奏", "前奏", "後奏",
 
   // Chinese
   "副歌", "主歌", "间奏", "前奏", "尾奏", "过门", "主歌1", "主歌2",
@@ -59,10 +61,13 @@ function isStructuralHeader(text: string): boolean {
   const clean = text.trim().toLowerCase();
   if (!clean) return false;
 
-  // Stripped colon or trailing numbers/symbols e.g., "Verse 1:", "Chorus -", "Intro (x2)"
+  // Stripped numbers at beginning/end, colon, hyphens, and trailing x2/x3 etc.
+  // e.g. "1-kuplet" -> "kuplet", "Verse 1:" -> "verse", "Chorus x2" -> "chorus"
   const normalized = clean
     .replace(/[:\-–—]+$/, "")
-    .replace(/\s*\(?x?\s*\d+\s*\)?$/i, "")
+    .replace(/\s*\(?x?\s*\d+\s*\)?$/i, "") // matches (x2) or x2
+    .replace(/^\d+[- ]*/, "") // matches "1-", "1 " at start
+    .replace(/[- ]*\d+$/, "") // matches "-1", " 1" at end
     .trim();
 
   // Direct keyword match
@@ -70,8 +75,8 @@ function isStructuralHeader(text: string): boolean {
     return true;
   }
 
-  // Regex pattern matching e.g. "Verse 1", "Chorus 2", "Intro", "Part 1", "Section A", "Hook 1"
-  const pattern = /^(intro|verse|verso|couplet|strophe|куплет|chorus|coro|refrain|припев|サビ|副歌|主歌|bridge|ponte|puente|бридж|hook|outro|interlude|solo|part|section|aメロ|bメロ|cメロ)\s*[:\-–—]?\s*\d*[a-c]?$/i;
+  // Regex pattern matching
+  const pattern = /^(intro|verse|verso|couplet|strophe|куплет|chorus|coro|refrain|припев|サビ|副歌|主歌|bridge|ponte|puente|бридж|hook|outro|interlude|solo|part|section|aメロ|bメロ|cメロ|kuplet|kuple|band|kiriş|kiris|chiqish|nakorat|tashqi|boshlanishi|tugashi|заспів|приспів|вступ|кінець)\s*[:\-–—]?\s*\d*[a-c]?$/i;
   return pattern.test(normalized);
 }
 
