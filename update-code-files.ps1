@@ -75,7 +75,7 @@ $sb = [System.Text.StringBuilder]::new()
 [void]$sb.AppendLine('================================================================================')
 
 foreach ($file in $allFiles) {
-    $rel = [System.IO.Path]::GetRelativePath($ProjectRoot, $file)
+    $rel = $file.Substring($ProjectRoot.Length).TrimStart('\', '/')
     [void]$sb.AppendLine('')
     [void]$sb.AppendLine('================================================================================')
     [void]$sb.AppendLine("FILE: $rel")

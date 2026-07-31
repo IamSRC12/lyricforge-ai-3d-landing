@@ -6,6 +6,7 @@ type FlatLyricWord = {
   original: string;
   normalized: string;
   blockIndex: number;
+  syllables: number;
 };
 
 export type AlignmentResult = {
@@ -21,6 +22,18 @@ function createId(): string {
     return `aligned_${crypto.randomUUID()}`;
   }
   return `aligned_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function estimateSyllableCount(word: string): number {
+  const clean = word.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  if (!clean) return 1;
+  // CJK characters
+  if (/[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]/.test(clean)) return Math.max(1, clean.length);
+
+  const vowels = clean.match(/[aeiouyàáâäãåèéêëìíîïòóôöõùúûüýÿ]+/g);
+  let count = vowels ? vowels.length : Math.ceil(clean.length / 3);
+  if (/[^aeiouy]e$/.test(clean) && count > 1) count -= 1;
+  return Math.max(1, count);
 }
 
 function normalizeToken(token: string): string {
@@ -69,6 +82,11 @@ function tokenSimilarity(a: string, b: string): number {
   const noApostropheB = b.replace(/'/g, "");
   if (noApostropheA === noApostropheB) return 0.98;
 
+  // Prefix matching e.g. "singing" vs "sing"
+  if (a.length >= 3 && b.length >= 3 && (a.startsWith(b) || b.startsWith(a))) {
+    return 0.88;
+  }
+
   const longest = Math.max(a.length, b.length);
   if (longest === 0) return 0;
 
@@ -81,8 +99,8 @@ function sanitizeWhisperWords(words: GroqWord[]): GroqWord[] {
       const start = Math.max(0, Number(word.start) || 0);
       const rawEnd = Number(word.end);
       const end = Number.isFinite(rawEnd)
-        ? Math.max(start + 0.03, rawEnd)
-        : start + 0.15;
+        ? Math.max(start + 0.02, rawEnd)
+        : start + 0.12;
 
       return {
         word: String(word.word || "").trim(),
@@ -114,6 +132,7 @@ function flattenLyrics(blockTexts: string[]): FlatLyricWord[] {
         original: word,
         normalized,
         blockIndex,
+        syllables: estimateSyllableCount(word),
       });
     }
   });
@@ -122,11 +141,8 @@ function flattenLyrics(blockTexts: string[]): FlatLyricWord[] {
 }
 
 /**
- * Sequence alignment:
- * - supplied lyrics remain the displayed source of truth
- * - Whisper remains the timing source of truth
- * - skipped Whisper words handle ad-libs and transcription noise
- * - skipped lyric words are interpolated between reliable anchors
+ * Dynamic Time Warping (DTW) Sequence Alignment:
+ * Align user's exact lyrics onto Whisper word timestamps with prosodic weighting.
  */
 function createWordMapping(
   lyricWords: FlatLyricWord[],
@@ -142,18 +158,17 @@ function createWordMapping(
   const width = whisperCount + 1;
   const directions = new Uint8Array((lyricCount + 1) * width);
 
-  // 1 = diagonal, 2 = skip lyric, 3 = skip Whisper
   let previous = new Float64Array(width);
   let current = new Float64Array(width);
 
   previous[0] = 0;
   for (let j = 1; j <= whisperCount; j++) {
-    previous[j] = previous[j - 1] - 0.15;
+    previous[j] = previous[j - 1] - 0.1;
     directions[j] = 3;
   }
 
   for (let i = 1; i <= lyricCount; i++) {
-    current[0] = previous[0] - 1.25;
+    current[0] = previous[0] - 1.1;
     directions[i * width] = 2;
 
     const lyricToken = lyricWords[i - 1].normalized;
@@ -165,15 +180,15 @@ function createWordMapping(
       const diagonalScore =
         previous[j - 1] +
         (similarity >= 0.98
-          ? 3
-          : similarity >= 0.78
-          ? 1.4
+          ? 3.5
+          : similarity >= 0.82
+          ? 2.0
           : similarity >= 0.62
-          ? 0.25
-          : -1.2);
+          ? 0.5
+          : -1.0);
 
-      const skipLyricScore = previous[j] - 1.25;
-      const skipWhisperScore = current[j - 1] - 0.15;
+      const skipLyricScore = previous[j] - 1.1;
+      const skipWhisperScore = current[j - 1] - 0.1;
 
       if (
         diagonalScore >= skipLyricScore &&
@@ -213,7 +228,7 @@ function createWordMapping(
         normalizeToken(whisperWords[j - 1].word)
       );
 
-      if (similarity >= 0.62) {
+      if (similarity >= 0.58) {
         mapping[i - 1] = j - 1;
       }
 
@@ -253,6 +268,9 @@ function findNextMapped(
   return -1;
 }
 
+/**
+ * Build Interpolated Timestamps with Prosodic Syllable Allocation
+ */
 function buildInterpolatedTimestamps(
   lyricWords: FlatLyricWord[],
   whisperWords: GroqWord[],
@@ -288,54 +306,55 @@ function buildInterpolatedTimestamps(
       if (previousWhisperIndex !== null && nextWhisperIndex !== null) {
         const rangeStart = whisperWords[previousWhisperIndex].end;
         const rangeEnd = whisperWords[nextWhisperIndex].start;
-        const missingCount = nextLyricIndex - previousLyricIndex - 1;
-        const missingPosition = index - previousLyricIndex;
 
-        const available = Math.max(0.04 * missingCount, rangeEnd - rangeStart);
-        const slot = available / Math.max(1, missingCount);
+        // Prosodic Syllable Weighting among unmapped gap words
+        let totalGapSyllables = 0;
+        let elapsedSyllables = 0;
 
-        const start = Math.max(
-          rangeStart,
-          rangeStart + (missingPosition - 1) * slot
-        );
+        for (let k = previousLyricIndex + 1; k < nextLyricIndex; k++) {
+          const syl = lyricWords[k].syllables || 1;
+          totalGapSyllables += syl;
+          if (k < index) elapsedSyllables += syl;
+        }
+
+        const mySyllables = lyricWord.syllables || 1;
+        const availableTime = Math.max(0.04 * (nextLyricIndex - previousLyricIndex - 1), rangeEnd - rangeStart);
+
+        const startFraction = totalGapSyllables > 0 ? elapsedSyllables / totalGapSyllables : 0;
+        const durationFraction = totalGapSyllables > 0 ? mySyllables / totalGapSyllables : 1 / (nextLyricIndex - previousLyricIndex - 1);
+
+        const start = rangeStart + startFraction * availableTime;
+        const wordDur = Math.max(0.04, durationFraction * availableTime * 0.9);
 
         return {
           word: lyricWord.original,
           start,
-          end: Math.min(rangeEnd, start + Math.max(0.04, slot * 0.88)),
+          end: Math.min(rangeEnd, start + wordDur),
         };
       }
     }
 
     if (previousLyricIndex >= 0) {
       const previousWhisperIndex = mapping[previousLyricIndex];
-
       if (previousWhisperIndex !== null) {
         const offset = index - previousLyricIndex;
-        const start =
-          whisperWords[previousWhisperIndex].end + (offset - 1) * 0.22;
-
+        const start = whisperWords[previousWhisperIndex].end + (offset - 1) * 0.2;
         return {
           word: lyricWord.original,
           start: Math.min(safeDuration, start),
-          end: Math.min(safeDuration, start + 0.18),
+          end: Math.min(safeDuration, start + 0.16),
         };
       }
     }
 
     if (nextLyricIndex >= 0) {
       const nextWhisperIndex = mapping[nextLyricIndex];
-
       if (nextWhisperIndex !== null) {
         const distance = nextLyricIndex - index;
-        const end = Math.max(
-          0.04,
-          whisperWords[nextWhisperIndex].start - (distance - 1) * 0.22
-        );
-
+        const end = Math.max(0.03, whisperWords[nextWhisperIndex].start - (distance - 1) * 0.2);
         return {
           word: lyricWord.original,
-          start: Math.max(0, end - 0.18),
+          start: Math.max(0, end - 0.16),
           end,
         };
       }
@@ -351,18 +370,17 @@ function buildInterpolatedTimestamps(
     };
   });
 
-  // Enforce monotonically increasing, valid timestamps.
   let cursor = 0;
 
   return output.map((word) => {
     const start = Math.max(cursor, word.start);
-    const end = Math.max(start + 0.03, word.end);
+    const end = Math.max(start + 0.025, word.end);
     cursor = start + 0.001;
 
     return {
       ...word,
       start: Number(Math.min(start, safeDuration).toFixed(3)),
-      end: Number(Math.min(Math.max(start + 0.03, end), safeDuration).toFixed(3)),
+      end: Number(Math.min(Math.max(start + 0.025, end), safeDuration).toFixed(3)),
     };
   });
 }
@@ -403,39 +421,38 @@ export function alignLyricsToWhisper(
     groupedWords[blockIndex].push(timestamp);
   });
 
-  const rawBlocks = cleanBlocks
-    .map((text, blockIndex) => {
-      const words = groupedWords[blockIndex];
-      if (words.length === 0) return null;
+  const rawBlocks = cleanBlocks.map((text, blockIndex) => {
+    const words = groupedWords[blockIndex];
+    if (words.length === 0) return null;
 
-      const startTime = Math.max(0, words[0].start - 0.04);
-      const endTime = Math.max(
-        startTime + 0.2,
-        words[words.length - 1].end + 0.08
-      );
+    const startTime = Math.max(0, words[0].start - 0.02);
+    const endTime = Math.max(
+      startTime + 0.15,
+      words[words.length - 1].end + 0.04
+    );
 
-      const block: LyricBlock = {
-        id: createId(),
-        text,
-        startTime: Number(startTime.toFixed(3)),
-        endTime: Number(endTime.toFixed(3)),
-        words,
-        style: {
-          ...defaultStyle,
-          gradient: { ...defaultStyle.gradient! },
-          backgroundBox: { ...defaultStyle.backgroundBox! },
-        },
-        animation: {
-          ...defaultAnimation,
-          in: "fade",
-          out: "fade",
-          durationIn: 0.12,
-          durationOut: 0.12,
-          customCSS: null,
-        },
-      };
-      return block;
-    });
+    const block: LyricBlock = {
+      id: createId(),
+      text,
+      startTime: Number(startTime.toFixed(3)),
+      endTime: Number(endTime.toFixed(3)),
+      words,
+      style: {
+        ...defaultStyle,
+        gradient: { ...defaultStyle.gradient! },
+        backgroundBox: { ...defaultStyle.backgroundBox! },
+      },
+      animation: {
+        ...defaultAnimation,
+        in: "fade",
+        out: "fade",
+        durationIn: 0.12,
+        durationOut: 0.12,
+        customCSS: null,
+      },
+    };
+    return block;
+  });
 
   const blocks: LyricBlock[] = rawBlocks
     .filter((block): block is LyricBlock => block !== null)

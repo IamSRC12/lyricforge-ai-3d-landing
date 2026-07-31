@@ -1,48 +1,79 @@
 /**
- * Clean lyrics text without destroying legitimate parenthesized lyrics (e.g. "I'm (still) here").
- * Strips structural labels like [Chorus], [Verse 2], [Intro], [Bridge], SRT timestamps, LRC timestamps, and BOM.
+ * Multi-language Lyric Cleaner & Header Stripper
+ *
+ * Strips structural section labels in any language (English, Spanish, Portuguese, French,
+ * German, Italian, Turkish, Russian, Hindi, Punjabi, Korean, Japanese, Chinese, Arabic, etc.)
+ * whether formatted with brackets [Intro], (Verse 1), 【Chorus】, or as standalone header lines
+ * (e.g. "Intro:", "Verse 1", "Bridge -", "Chorus x2").
  */
 
-const STRUCTURAL_KEYWORDS = [
-  "intro",
-  "outro",
-  "verse",
-  "chorus",
-  "pre-chorus",
-  "prechorus",
-  "post-chorus",
-  "postchorus",
-  "bridge",
-  "hook",
-  "refrain",
-  "interlude",
-  "solo",
-  "instrumental",
-  "breakdown",
-  "drop",
-  "build",
-  "buildup",
-  "tag",
-  "coda",
-  "estribillo",
-  "verso",
-  "coro",
-  "puente",
-  "introducción",
-  "couplet",
-  "pont",
-  "strophe",
-  "kehreim",
-  "サビ",
-  "イントロ",
-  "アウトロ",
-  "repeat",
+export const MULTI_LANG_STRUCTURAL_KEYWORDS: string[] = [
+  // English
+  "intro", "outro", "verse", "chorus", "bridge", "hook", "pre-chorus", "prechorus",
+  "post-chorus", "postchorus", "interlude", "instrumental", "solo", "break", "breakdown",
+  "drop", "buildup", "build-up", "tag", "vamp", "coda", "refrain", "skit", "spoken",
+  "ad-lib", "adlib", "part", "section", "lead", "guitar solo", "piano solo", "repeat",
+
+  // Spanish / Portuguese
+  "verso", "coro", "estribillo", "puente", "ponte", "refrão", "refrao", "introducción",
+  "introducao", "estanza", "letra", "estrofa",
+
+  // French
+  "couplet", "refrain", "pont", "strophe", "introduction", "outro",
+
+  // German
+  "strophe", "brücke", "brucke", "kehreim", "refrain", "vorspiel", "nachspiel",
+
+  // Italian
+  "strofa", "ritornello", "ponte", "introduzione",
+
+  // Turkish
+  "nakarat", "köprü", "kopru", "giriş", "giris", "çıkış", "cikis",
+
+  // Russian
+  "куплет", "припев", "бридж", "интро", "аутро", "вступление", "концовка", "соло",
+
+  // Hindi / Punjabi
+  "मुखड़ा", "अंतरा", "कोरस", "ब्रिज", "मुखडा", "अंतर", "संगीत",
+
+  // Korean
+  "벌스", "코러스", "브릿지", "인트로", "아웃트로", "후렴", "간주", "절",
+
+  // Japanese
+  "サビ", "aメロ", "bメメロ", "cメロ", "イントロ", "アウトロ", "ブリッジ", "間奏", "前奏", "後奏",
+
+  // Chinese
+  "副歌", "主歌", "间奏", "前奏", "尾奏", "过门", "主歌1", "主歌2",
+
+  // Arabic
+  "مقطع", "لازمة", "جسر", "مقدمة", "خاتمة",
 ];
 
+// Regex matching enclosed tags: [Intro], (Verse 1), {Bridge}, 【Chorus】, 〔Outro〕
+const ENCLOSED_TAG_REGEX = /[[({【〔]\s*([^\])}】〕]{1,60})\s*[\])}】〕]/gi;
 const LRC_TIMESTAMP_REGEX = /\[\d{2,}:\d{2}(?:\.\d{1,3})?\]/gi;
 const SRT_TIMESTAMP_REGEX = /^\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}$/i;
 const SRT_NUMBER_REGEX = /^\d+$/;
-const BRACKET_TAG_REGEX = /^[\[\(\{]\s*([^\]\)\}]{1,50})\s*[\]\)\}]$/;
+
+function isStructuralHeader(text: string): boolean {
+  const clean = text.trim().toLowerCase();
+  if (!clean) return false;
+
+  // Stripped colon or trailing numbers/symbols e.g., "Verse 1:", "Chorus -", "Intro (x2)"
+  const normalized = clean
+    .replace(/[:\-–—]+$/, "")
+    .replace(/\s*\(?x?\s*\d+\s*\)?$/i, "")
+    .trim();
+
+  // Direct keyword match
+  if (MULTI_LANG_STRUCTURAL_KEYWORDS.some((kw) => normalized === kw || normalized.startsWith(kw + " ") || normalized.endsWith(" " + kw))) {
+    return true;
+  }
+
+  // Regex pattern matching e.g. "Verse 1", "Chorus 2", "Intro", "Part 1", "Section A", "Hook 1"
+  const pattern = /^(intro|verse|verso|couplet|strophe|куплет|chorus|coro|refrain|припев|サビ|副歌|主歌|bridge|ponte|puente|бридж|hook|outro|interlude|solo|part|section|aメロ|bメロ|cメロ)\s*[:\-–—]?\s*\d*[a-c]?$/i;
+  return pattern.test(normalized);
+}
 
 export function cleanLyricsText(raw: string): { cleaned: string; removedTags: string[]; warnings: string[] } {
   const removedTags: string[] = [];
@@ -50,10 +81,10 @@ export function cleanLyricsText(raw: string): { cleaned: string; removedTags: st
 
   if (!raw) return { cleaned: "", removedTags, warnings };
 
-  // Remove UTF-8 BOM & normalize CRLF
+  // Remove UTF-8 BOM & normalize line endings
   let sanitized = raw.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
 
-  // Remove LRC timestamps from lines
+  // Strip LRC timestamps
   sanitized = sanitized.replace(LRC_TIMESTAMP_REGEX, (match) => {
     removedTags.push(match);
     return "";
@@ -62,48 +93,50 @@ export function cleanLyricsText(raw: string): { cleaned: string; removedTags: st
   const lines = sanitized.split("\n");
   const cleanedLines: string[] = [];
 
-  for (let rawLine of lines) {
+  for (const rawLine of lines) {
     let line = rawLine.trim();
     if (!line) continue;
 
-    // Remove SRT index numbers (e.g., "1", "2") if followed by time
+    // Remove SRT index numbers
     if (SRT_NUMBER_REGEX.test(line)) {
       removedTags.push(line);
       continue;
     }
 
-    // Remove SRT timestamp lines
+    // Remove SRT timestamp ranges
     if (SRT_TIMESTAMP_REGEX.test(line)) {
       removedTags.push(line);
       continue;
     }
 
-    // Check bracketed structural tags e.g. [Chorus], [Verse 1], (Bridge)
-    const bracketMatch = line.match(BRACKET_TAG_REGEX);
+    // Check if whole line is an enclosed tag like [Intro], (Verse 1), 【Chorus】
+    const bracketMatch = line.match(/^[[({【〔]\s*([^\])}】〕]{1,60})\s*[\])}】〕]$/);
     if (bracketMatch) {
-      const inner = bracketMatch[1].trim().toLowerCase();
-      const isKnownKeyword = STRUCTURAL_KEYWORDS.some((kw) => inner.includes(kw));
-      const isShortHeader = /^(intro|verse|chorus|bridge|hook|outro|part|section)\s*\d*$/i.test(inner);
-
-      if (isKnownKeyword || isShortHeader) {
+      const inner = bracketMatch[1].trim();
+      if (isStructuralHeader(inner) || /^(repeat|\d+x|x\d+)/i.test(inner)) {
         removedTags.push(line);
-        continue; // drop structural header line
+        continue;
       }
     }
 
-    // Strip inline bracketed structural tags like "[Chorus] Hello" -> "Hello"
-    line = line.replace(/\[([^\]]{1,30})\]|\(([^\)]{1,30})\)/g, (match, p1, p2) => {
-      const inner = (p1 || p2 || "").trim().toLowerCase();
-      const isKnownKeyword = STRUCTURAL_KEYWORDS.some((kw) => inner.includes(kw));
-      if (isKnownKeyword) {
+    // Check if whole line is an unbracketed structural header (e.g. "Intro:", "Verse 1", "Chorus")
+    if (isStructuralHeader(line)) {
+      removedTags.push(line);
+      continue;
+    }
+
+    // Strip inline enclosed structural tags e.g. "[Chorus] We are the champions" -> "We are the champions"
+    line = line.replace(ENCLOSED_TAG_REGEX, (match, p1) => {
+      const inner = String(p1 || "").trim();
+      if (isStructuralHeader(inner)) {
         removedTags.push(match);
         return "";
       }
-      return match; // preserve legitimate parens like "(still)"
+      return match;
     });
 
     line = line.replace(/\s{2,}/g, " ").trim();
-    if (line) {
+    if (line && !isStructuralHeader(line)) {
       cleanedLines.push(line);
     }
   }
@@ -115,7 +148,6 @@ export function cleanLyricsText(raw: string): { cleaned: string; removedTags: st
 export function splitIntoBlocks(cleanedText: string): string[] {
   if (!cleanedText) return [];
 
-  // Strip SRT-style index numbers, SRT timestamps, and LRC timestamps first.
   const cleaned = cleanedText
     .replace(/^\s*\d+\s*$/gm, "")
     .replace(/^\s*\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,.]\d{3}.*$/gm, "")
@@ -130,9 +162,10 @@ export function splitIntoBlocks(cleanedText: string): string[] {
   const blocks: string[] = [];
 
   for (const line of lines) {
-    const words = line.split(/\s+/).filter(Boolean);
+    // Skip residual header lines if any survived
+    if (isStructuralHeader(line)) continue;
 
-    // Keep natural lyric lines intact unless they are excessively long.
+    const words = line.split(/\s+/).filter(Boolean);
     if (words.length <= 14) {
       blocks.push(line);
       continue;
