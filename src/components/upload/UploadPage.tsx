@@ -123,40 +123,7 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
     maxFiles: 1,
   });
 
-  const runSplit = async (mode: SplitMode, includeGaps: boolean) => {
-    if (!audioFile) return;
-    setStage("splitting");
-    setError(null);
-    try {
-      let buffer = audioEngine.audioBuffer;
-      let decodedDuration = audioEngine.duration;
 
-      if (!buffer) {
-        log("Decoding audio file...");
-        const result = await audioEngine.load(audioFile);
-        buffer = audioEngine.audioBuffer;
-        decodedDuration = result.duration;
-      }
-
-      if (!buffer) throw new Error("Audio decode failed — try converting to WAV or MP3.");
-
-      const blocks = useLyricStore.getState().lyricBlocks;
-      const segments = await splitAudioByLyrics(buffer, blocks, decodedDuration, {
-        mode,
-        includeInstrumentalGaps: includeGaps,
-        onProgress: (_, msg) => log(msg),
-      });
-
-      setAudioSegments(segments);
-      log(`Split into ${segments.length} clips (mode: ${mode})`);
-      setStage("review");
-    } catch (e) {
-      setStage("error");
-      const msg = e instanceof Error ? e.message : "Split failed.";
-      setError(msg);
-      log(`Split error: ${msg}`);
-    }
-  };
 
   const handleAnalyze = async () => {
     if (!audioFile || !lyricsText.trim()) {
@@ -305,8 +272,8 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
       if (!isMounted.current) return;
 
       setLyricBlocks(finalBlocks);
-      log(`Aligned ${finalBlocks.length} lyric lines — now cutting audio…`);
-      await runSplit(splitMode, false);
+      log(`Aligned ${finalBlocks.length} lyric lines successfully.`);
+      setStage("review");
     } catch (e: any) {
       if (isMounted.current) {
         setStage("error");
@@ -520,8 +487,21 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
         </div>
 
         {stage === "review" && (
-          <div className="mt-6">
-            <SegmentPreview onInsert={onAnalyzed} onResplit={(m, g) => void runSplit(m, g)} />
+          <div className="mt-8 rounded-[20px] border border-emerald-500/30 bg-emerald-500/10 p-8 text-center max-w-[640px] mx-auto">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500 text-black text-xl font-bold">
+              ✓
+            </div>
+            <h3 className="mt-4 text-base font-bold text-white">Lyrics Aligned Successfully!</h3>
+            <p className="mt-2 text-xs text-white/60">
+              Deterministic Whisper alignment is complete. Ready to proceed to the editor workspace.
+            </p>
+            <Button
+              size="lg"
+              className="mt-6 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 font-bold px-8 py-3 shadow-[0_0_20px_rgba(124,58,237,0.3)] hover:scale-[1.02] transition"
+              onClick={onAnalyzed}
+            >
+              Next: Open Studio Editor →
+            </Button>
           </div>
         )}
       </div>
