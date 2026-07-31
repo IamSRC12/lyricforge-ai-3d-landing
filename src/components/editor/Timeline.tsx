@@ -27,6 +27,7 @@ export function Timeline() {
     updateLyricBlocks,
     audioWaveform,
     pushHistory,
+    audioSegments,
   } = useLyricStore();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -243,14 +244,17 @@ export function Timeline() {
           <div className="h-9 flex items-center px-3 border-b border-white/5 font-bold text-amber-300">
             🎬 ANIM
           </div>
-          <div className="h-9 flex items-center px-3 font-bold text-blue-300">
+          <div className="h-9 flex items-center px-3 border-b border-white/5 font-bold text-blue-300">
             🖼 BG
+          </div>
+          <div className="h-9 flex items-center px-3 font-bold text-emerald-300">
+            ✂ SPLITS
           </div>
         </div>
 
         {/* Scrollable Timeline Viewport */}
         <div ref={containerRef} className="relative flex-1 overflow-auto bg-[#07070B]" onClick={onTimelineClick}>
-          <div style={{ width: totalWidth }} className="relative min-h-[170px] pb-3">
+          <div style={{ width: totalWidth }} className="relative min-h-[210px] pb-3">
             {/* Ruler Time Markers */}
             <div className="sticky top-0 z-20 flex h-7 border-b border-white/10 bg-[#0D0D14] font-mono text-[10px] text-white/40 pointer-events-none">
               {Array.from({ length: rulerSecondMarks }).map((_, i) => (
@@ -350,6 +354,28 @@ export function Timeline() {
               >
                 <span>3D Canvas Scene / Background Renderer Track</span>
               </div>
+            </div>
+
+            {/* 5. Track ✂ SPLITS */}
+            <div className="relative h-9 w-full border-t border-white/10 bg-black/40">
+              {audioSegments.map((seg) => {
+                const left = seg.startTime * pixelsPerSecond;
+                const width = Math.max(2, seg.duration * pixelsPerSecond);
+                return (
+                  <div
+                    key={seg.id}
+                    title={`${seg.fileName}\n${seg.text}`}
+                    style={{ left, width }}
+                    className={`absolute top-1 bottom-1 flex items-center overflow-hidden rounded-md border px-1 font-mono text-[9px] ${
+                      seg.isInstrumental
+                        ? "border-purple-500/40 bg-purple-500/15 text-purple-200"
+                        : "border-emerald-500/40 bg-emerald-500/15 text-emerald-200"
+                    }`}
+                  >
+                    <span className="truncate">{String(seg.index + 1).padStart(2, "0")}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

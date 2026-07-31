@@ -121,7 +121,7 @@ export function EditorPage({ onExport }: { onExport: () => void }) {
             <VideoPreview />
           </div>
 
-          <div className="h-[220px] shrink-0">
+          <div className="h-[262px] shrink-0">
             <Timeline />
           </div>
         </div>

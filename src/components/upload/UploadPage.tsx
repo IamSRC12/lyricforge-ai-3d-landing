@@ -2,6 +2,9 @@ import { useCallback, useState, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import { Button } from "@/components/ui/Button";
 import { useLyricStore, type LyricBlock } from "@/store/useLyricStore";
+import { audioEngine } from "@/lib/audioEngine";
+import { splitAudioByLyrics, type SplitMode } from "@/lib/audioSplitter";
+import { SegmentPreview } from "./SegmentPreview";
 import { getAudioDuration, generateWaveform, validateAudioFile, injectScopedCSS } from "@/lib/audioUtils";
 import { cleanLyricsText, splitIntoBlocks, validateLyrics } from "@/lib/cleanLyrics";
 import { transcribeWithGroq } from "@/lib/groq";
@@ -13,14 +16,16 @@ import { LyricsAnalyzer, generateWordTimestamps } from "@/lib/lyricsAnalyzer";
 import { defaultStyle, defaultAnimation } from "@/store/useLyricStore";
 
 export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
-  const { setAudio, settings, setLyricBlocks } = useLyricStore();
+  const { setAudio, settings, setLyricBlocks, setAudioSegments, splitMode } = useLyricStore();
   const [audioFile, setAudioFileLocal] = useState<File | null>(null);
   const [audioUrl, setAudioUrlLocal] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   const [lyricsText, setLyricsText] = useState("");
   const [cleanInfo, setCleanInfo] = useState<{ removed: string[]; warnings: string[] } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [stage, setStage] = useState<"idle" | "transcribing" | "analyzing" | "error">("idle");
+  const [stage, setStage] = useState<
+    "idle" | "transcribing" | "analyzing" | "splitting" | "review" | "error"
+  >("idle");
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,6 +122,35 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
     accept: { "text/plain": [".txt", ".lrc", ".srt"] },
     maxFiles: 1,
   });
+
+  const runSplit = async (mode: SplitMode, includeGaps: boolean) => {
+    if (!audioFile) return;
+    setStage("splitting");
+    setError(null);
+    try {
+      // Await the decode explicitly — setAudio() kicks it off via a dynamic
+      // import, which is a race condition we must not rely on here.
+      const { duration: decodedDuration } = await audioEngine.load(audioFile);
+      const buffer = audioEngine.audioBuffer;
+      if (!buffer) throw new Error("Audio decode failed — try converting to WAV or MP3.");
+
+      const blocks = useLyricStore.getState().lyricBlocks;
+      const segments = await splitAudioByLyrics(buffer, blocks, decodedDuration, {
+        mode,
+        includeInstrumentalGaps: includeGaps,
+        onProgress: (_, msg) => log(msg),
+      });
+
+      setAudioSegments(segments);
+      log(`Split into ${segments.length} clips (mode: ${mode})`);
+      setStage("review");
+    } catch (e) {
+      setStage("error");
+      const msg = e instanceof Error ? e.message : "Split failed.";
+      setError(msg);
+      log(`Split error: ${msg}`);
+    }
+  };
 
   const handleAnalyze = async () => {
     if (!audioFile || !lyricsText.trim()) {
@@ -265,8 +299,8 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
       if (!isMounted.current) return;
 
       setLyricBlocks(finalBlocks);
-      log(`Pushed ${finalBlocks.length} synchronized lyric blocks to Studio Timeline`);
-      onAnalyzed();
+      log(`Aligned ${finalBlocks.length} lyric lines — now cutting audio…`);
+      await runSplit(splitMode, false);
     } catch (e: any) {
       if (isMounted.current) {
         setStage("error");
@@ -371,9 +405,13 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
                 {[
                   { id: "transcribing", title: "Groq Whisper v3 Turbo (Primary)", desc: "Exact word timestamps & lyrics alignment" },
                   { id: "analyzing", title: "NVIDIA NIM Engine (Optional)", desc: "AI visual themes & emotion styling" },
+                  { id: "splitting", title: "Segment Splitter", desc: "Cut one WAV clip per lyric line" },
                 ].map((s, i) => {
                   const active = stage === s.id;
-                  const done = stage === "analyzing" && i === 0;
+                  const done =
+                    (stage === "analyzing" && i === 0) ||
+                    (stage === "splitting" && i <= 1) ||
+                    (stage === "review" && i <= 2);
                   return (
                     <div
                       key={s.id}
@@ -428,7 +466,7 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
                   size="lg"
                   className="w-full rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 font-bold py-3 shadow-[0_0_20px_rgba(124,58,237,0.3)] hover:scale-[1.02] transition"
                   onClick={handleAnalyze}
-                  loading={stage === "transcribing" || stage === "analyzing"}
+                  loading={stage === "transcribing" || stage === "analyzing" || stage === "splitting"}
                   disabled={!audioFile || !lyricsText.trim()}
                 >
                   <Wand2 className="mr-2 h-4 w-4" /> Analyze → Divide Lyrics
@@ -474,6 +512,12 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
             </div>
           </div>
         </div>
+
+        {stage === "review" && (
+          <div className="mt-6">
+            <SegmentPreview onInsert={onAnalyzed} onResplit={(m, g) => void runSplit(m, g)} />
+          </div>
+        )}
       </div>
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
