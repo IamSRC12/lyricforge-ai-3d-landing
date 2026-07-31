@@ -138,6 +138,8 @@ type Actions = {
   updateLyricBlock: (id: string, patch: Partial<LyricBlock>) => void;
   updateBlockStyle: (id: string, stylePatch: Partial<LyricBlockStyle>) => void;
   updateBlockAnimation: (id: string, animPatch: Partial<LyricAnimation>) => void;
+  applyStyleToAllBlocks: (stylePatch: Partial<LyricBlockStyle>) => void;
+  applyAnimationToAllBlocks: (animPatch: Partial<LyricAnimation>) => void;
   deleteLyricBlock: (id: string) => void;
   duplicateBlock: (id: string) => void;
   splitBlock: (id: string, wordIndex: number) => void;
@@ -276,6 +278,31 @@ export const useLyricStore = create<ProjectState & Actions>()(
       updateBlockAnimation: (id, animPatch) => {
         set({
           lyricBlocks: get().lyricBlocks.map((b) => (b.id === id ? { ...b, animation: { ...b.animation, ...animPatch } } : b)),
+        });
+      },
+
+      applyStyleToAllBlocks: (stylePatch) => {
+        get().pushHistory();
+        set({
+          lyricBlocks: get().lyricBlocks.map((b) => {
+            const updatedStyle: LyricBlockStyle = {
+              ...b.style,
+              ...stylePatch,
+              gradient: stylePatch.gradient ? { ...b.style.gradient!, ...stylePatch.gradient } : b.style.gradient,
+              backgroundBox: stylePatch.backgroundBox ? { ...b.style.backgroundBox!, ...stylePatch.backgroundBox } : b.style.backgroundBox,
+            };
+            return { ...b, style: updatedStyle };
+          }),
+        });
+      },
+
+      applyAnimationToAllBlocks: (animPatch) => {
+        get().pushHistory();
+        set({
+          lyricBlocks: get().lyricBlocks.map((b) => ({
+            ...b,
+            animation: { ...b.animation, ...animPatch },
+          })),
         });
       },
 
