@@ -1,5 +1,9 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import {
+  DEFAULT_KARAOKE_STYLE,
+  DEFAULT_KARAOKE_SCENE,
+} from "@/types/project";
 import type {
   LyricBlock,
   LyricBlockStyle,
