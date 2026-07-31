@@ -1,8 +1,8 @@
 ﻿================================================================================
 CODE.TXT - COMBINED SOURCE SNAPSHOT
 Project       : lyricforge-ai-3d-landing
-Generated     : 2026-07-31 15:20:29
-Total files   : 61
+Generated     : 2026-07-31 21:29:21
+Total files   : 65
 Regenerate    : .\update-code-files.ps1
 Change log    : code_log.txt
 Excluded      : node_modules, .next, .env.local (secrets),
@@ -33,6 +33,7 @@ FILE: package.json
     "drizzle-orm": "0.45.2",
     "framer-motion": "^12.43.0",
     "lucide-react": "^1.28.0",
+    "mp4-muxer": "^5.2.2",
     "next": "16.2.6",
     "pg": "8.20.0",
     "postprocessing": "^6.39.4",
@@ -123,7 +124,7 @@ FILE: next-env.d.ts
 /// <reference types="next" />
 /// <reference types="next/image-types/global" />
 /// <reference types="next/navigation-types/compat/navigation" />
-import "./.next/types/routes.d.ts";
+import "./.next/dev/types/routes.d.ts";
 
 // NOTE: This file should not be edited
 // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
@@ -644,18 +645,9 @@ FILE: src\app\page.tsx
 ================================================================================
 import AnimationGallery from "@/components/landing/AnimationGallery";
 import EditorShowcase from "@/components/landing/EditorShowcase";
-import FAQ from "@/components/landing/FAQ";
 import Features from "@/components/landing/Features";
-import Footer from "@/components/landing/Footer";
-import ForgeDemo from "@/components/landing/ForgeDemo";
 import Hero from "@/components/landing/Hero";
 import Nav from "@/components/landing/Nav";
-import Pipeline from "@/components/landing/Pipeline";
-import Pricing from "@/components/landing/Pricing";
-import Roadmap from "@/components/landing/Roadmap";
-import Waitlist from "@/components/landing/Waitlist";
-import type { FeatureVote } from "@/db/schema";
-import { DEFAULT_ROADMAP, getRoadmap } from "@/lib/roadmap";
 import { getLandingStats, type LandingStats } from "@/lib/stats";
 
 export const dynamic = "force-dynamic";
@@ -669,17 +661,7 @@ const FALLBACK_STATS: LandingStats = {
 };
 
 export default async function HomePage() {
-  const [stats, features] = await Promise.all([
-    getLandingStats().catch(() => FALLBACK_STATS),
-    getRoadmap().catch(
-      () =>
-        DEFAULT_ROADMAP.map((entry, index) => ({
-          ...entry,
-          id: index + 1,
-          createdAt: new Date(),
-        })) as FeatureVote[],
-    ),
-  ]);
+  const stats = await getLandingStats().catch(() => FALLBACK_STATS);
 
   return (
     <>
@@ -687,16 +669,9 @@ export default async function HomePage() {
       <main className="relative overflow-hidden">
         <Hero stats={stats} />
         <Features />
-        <Pipeline />
-        <ForgeDemo initialRuns={stats.timelinesForged} />
         <EditorShowcase />
         <AnimationGallery />
-        <Pricing />
-        <Roadmap initialFeatures={features} />
-        <Waitlist initialCount={stats.waitlistCount} />
-        <FAQ />
       </main>
-      <Footer />
     </>
   );
 }
@@ -925,9 +900,10 @@ export function EditorPage({ onExport }: { onExport: () => void }) {
 FILE: src\components\editor\PropertiesPanel.tsx
 ================================================================================
 import { useLyricStore } from "@/store/useLyricStore";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { loadCustomFont } from "@/lib/audioUtils";
 import type { LyricBlockStyle, LyricAnimationIn, LyricAnimationOut, AISettings } from "@/types/project";
+import { ANIMATION_PRESETS, PRESET_CATEGORIES, type PresetCategory } from "@/lib/animation-presets";
 
 const FONTS = [
   "Inter",
@@ -944,31 +920,6 @@ const FONTS = [
   "General Sans",
 ];
 
-const ANIM_IN: LyricAnimationIn[] = [
-  "fade",
-  "pop",
-  "slideUp",
-  "slideDown",
-  "slideLeft",
-  "slideRight",
-  "zoom",
-  "typewriter",
-  "bounce",
-  "glitch",
-  "kinetic",
-  "none",
-];
-
-const ANIM_OUT: LyricAnimationOut[] = [
-  "fade",
-  "pop",
-  "slideUp",
-  "slideDown",
-  "slideLeft",
-  "slideRight",
-  "zoom",
-  "none",
-];
 
 type StyleTemplate = {
   name: string;
@@ -1075,11 +1026,26 @@ export function PropertiesPanel() {
     setBackground,
     backgroundAsset,
     pushHistory,
+    applyStyleToAllBlocks,
+    applyAnimationToAllBlocks,
   } = useLyricStore();
 
   const selected = lyricBlocks.find((b) => b.id === selectedBlockId);
   const [customFonts, setCustomFonts] = useState<string[]>([]);
   const [fontError, setFontError] = useState<string | null>(null);
+  const [animPickerTarget, setAnimPickerTarget] = useState<"in" | "out" | null>(null);
+  const [animCategory, setAnimCategory] = useState<PresetCategory | "all">("all");
+  const [hoveredPreset, setHoveredPreset] = useState<string | null>(null);
+
+  const presetKeyframeSheet = useMemo(
+    () => ANIMATION_PRESETS.map((pr) => `@keyframes lf-${pr.id}{${pr.keyframes}}`).join("\n"),
+    [],
+  );
+
+  const visiblePresets = useMemo(
+    () => animCategory === "all" ? ANIMATION_PRESETS : ANIMATION_PRESETS.filter((pr) => pr.category === animCategory),
+    [animCategory],
+  );
 
   const handleFontUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1129,6 +1095,7 @@ export function PropertiesPanel() {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto pr-1">
+      <style dangerouslySetInnerHTML={{ __html: presetKeyframeSheet }} />
       {/* Background */}
       <div className="rounded-[16px] border border-white/10 bg-[#14141C] p-4">
         <div className="mb-3 flex items-center justify-between">
@@ -1212,24 +1179,6 @@ export function PropertiesPanel() {
         )}
       </div>
 
-      {/* Templates */}
-      <div className="rounded-[16px] border border-white/10 bg-[#14141C] p-4">
-        <h3 className="mb-3 text-[11px] font-bold uppercase tracking-widest text-white/60">Style Templates</h3>
-        <div className="grid grid-cols-2 gap-2">
-          {TEMPLATES.map((tpl) => (
-            <button
-              key={tpl.name}
-              type="button"
-              onClick={() => applyTemplate(tpl.style)}
-              disabled={!selected}
-              className="rounded-xl border border-white/10 bg-white/[0.04] p-2 text-left hover:bg-white/[0.08] disabled:opacity-40"
-            >
-              <div className="text-[11px] font-bold text-white">{tpl.name}</div>
-              <div className="mt-1 text-[10px] text-white/40 truncate">{tpl.style.fontFamily}</div>
-            </button>
-          ))}
-        </div>
-      </div>
 
       {/* Selected block */}
       {selected ? (
@@ -1319,7 +1268,16 @@ export function PropertiesPanel() {
           </div>
 
           <div className="rounded-[16px] border border-white/10 bg-[#14141C] p-4">
-            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-widest text-white/60">Style Controls</h3>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-[11px] font-bold uppercase tracking-widest text-white/60">Style Controls</h3>
+              <button
+                type="button"
+                onClick={() => applyStyleToAllBlocks(selected.style)}
+                className="rounded-full bg-purple-500/20 px-2.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-500/30 hover:bg-purple-500/35 transition"
+              >
+                Apply to All
+              </button>
+            </div>
 
             <div className="space-y-4">
               <div>
@@ -1505,45 +1463,137 @@ export function PropertiesPanel() {
           </div>
 
           <div className="rounded-[16px] border border-white/10 bg-[#14141C] p-4">
-            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-widest text-white/60">Animation</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[11px] text-white/50">In</label>
-                <select
-                  value={selected.animation.in}
-                  onChange={(e) => {
-                    pushHistory();
-                    updateBlockAnimation(selected.id, { in: e.target.value as LyricAnimationIn });
-                  }}
-                  className="mt-1 w-full rounded-lg border border-white/10 bg-black/50 px-2 py-2 text-xs text-white"
-                >
-                  {ANIM_IN.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-[11px] text-white/50">Out</label>
-                <select
-                  value={selected.animation.out}
-                  onChange={(e) => {
-                    pushHistory();
-                    updateBlockAnimation(selected.id, { out: e.target.value as LyricAnimationOut });
-                  }}
-                  className="mt-1 w-full rounded-lg border border-white/10 bg-black/50 px-2 py-2 text-xs text-white"
-                >
-                  {ANIM_OUT.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-[11px] font-bold uppercase tracking-widest text-white/60">Animation</h3>
+              <button
+                type="button"
+                onClick={() => applyAnimationToAllBlocks(selected.animation)}
+                className="rounded-full bg-purple-500/20 px-2.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-500/30 hover:bg-purple-500/35 transition"
+              >
+                Apply to All
+              </button>
             </div>
 
+            {/* In / Out selector buttons */}
+            <div className="grid grid-cols-2 gap-2">
+              {(["in", "out"] as const).map((dir) => {
+                const currentAnim = dir === "in" ? selected.animation.in : selected.animation.out;
+                const isOpen = animPickerTarget === dir;
+                return (
+                  <div key={dir}>
+                    <label className="text-[11px] text-white/50 capitalize">{dir}</label>
+                    <button
+                      type="button"
+                      onClick={() => setAnimPickerTarget(isOpen ? null : dir)}
+                      className={`mt-1 flex w-full items-center justify-between gap-1 rounded-lg border px-2 py-2 text-left text-xs transition ${
+                        isOpen
+                          ? "border-white/40 bg-white/10 text-white"
+                          : "border-white/10 bg-black/50 text-white/70 hover:border-white/20"
+                      }`}
+                    >
+                      <span className="truncate">{currentAnim || "none"}</span>
+                      <span className="shrink-0 text-[10px] text-white/40">{isOpen ? "▲" : "▼"}</span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Visual preset picker */}
+            {animPickerTarget && (
+              <div className="mt-2 overflow-hidden rounded-xl border border-white/10 bg-[#0C0C16]">
+                {/* Category tabs */}
+                <div className="flex flex-wrap gap-1 border-b border-white/5 p-2">
+                  {PRESET_CATEGORIES.map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setAnimCategory(cat.id)}
+                      className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium transition ${
+                        animCategory === cat.id
+                          ? "bg-white/20 text-white"
+                          : "text-white/40 hover:text-white/70"
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Preset grid */}
+                <div className="grid max-h-[320px] grid-cols-2 gap-1.5 overflow-y-auto p-2">
+                  {/* None option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      pushHistory();
+                      updateBlockAnimation(selected.id, { [animPickerTarget]: "none" } as any);
+                      setAnimPickerTarget(null);
+                    }}
+                    className={`rounded-lg border p-2 text-left transition ${
+                      (animPickerTarget === "in" ? selected.animation.in : selected.animation.out) === "none"
+                        ? "border-white/50 bg-white/10"
+                        : "border-white/5 bg-white/[0.02] hover:border-white/20"
+                    }`}
+                  >
+                    <div className="grid h-9 place-items-center rounded bg-white/5 text-sm text-white/30">—</div>
+                    <div className="mt-1 text-[10px] font-medium text-white">None</div>
+                    <div className="text-[9px] text-white/30">no animation</div>
+                  </button>
+
+                  {visiblePresets.map((preset) => {
+                    const currentVal = animPickerTarget === "in" ? selected.animation.in : selected.animation.out;
+                    const isActive = currentVal === preset.id;
+                    const isHovered = hoveredPreset === preset.id;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onMouseEnter={() => setHoveredPreset(preset.id)}
+                        onMouseLeave={() => setHoveredPreset(null)}
+                        onClick={() => {
+                          pushHistory();
+                          updateBlockAnimation(selected.id, { [animPickerTarget]: preset.id } as any);
+                          setAnimPickerTarget(null);
+                        }}
+                        className={`rounded-lg border p-2 text-left transition ${
+                          isActive
+                            ? "border-purple-400/60 bg-purple-500/15"
+                            : "border-white/5 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.05]"
+                        }`}
+                      >
+                        <div className="grid h-9 place-items-center overflow-hidden rounded bg-[radial-gradient(circle_at_50%_60%,rgba(124,58,237,0.25),transparent)]">
+                          <span
+                            key={`${preset.id}-${isHovered}`}
+                            style={{
+                              animation: isHovered
+                                ? `lf-${preset.id} ${preset.duration || 1.4}s ${preset.easing} infinite`
+                                : undefined,
+                              ...(preset.id === "karaoke-fill"
+                                ? {
+                                    backgroundImage: "linear-gradient(90deg,#06b6d4,#a78bfa)",
+                                    backgroundClip: "text",
+                                    WebkitBackgroundClip: "text",
+                                    color: "transparent",
+                                    backgroundSize: "100% 100%",
+                                  }
+                                : {}),
+                            }}
+                            className="text-sm font-bold text-white will-change-transform"
+                          >
+                            Aa
+                          </span>
+                        </div>
+                        <div className="mt-1 truncate text-[10px] font-medium text-white">{preset.name}</div>
+                        <div className="truncate text-[9px] text-white/30">{preset.detail}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Duration controls */}
             <div className="mt-3 grid grid-cols-2 gap-3">
               <div>
                 <label className="text-[11px] text-white/50">Duration In (s)</label>
@@ -1574,16 +1624,7 @@ export function PropertiesPanel() {
               </div>
             </div>
 
-            <div className="mt-3">
-              <label className="text-[11px] text-white/50">Custom CSS (Scoped to block)</label>
-              <textarea
-                value={selected.animation.customCSS || ""}
-                onChange={(e) => updateBlockAnimation(selected.id, { customCSS: e.target.value || null })}
-                onBlur={() => pushHistory()}
-                placeholder="@keyframes ..."
-                className="mt-1 min-h-[70px] w-full rounded-lg border border-white/10 bg-black/40 p-2 font-mono text-[11px] text-white"
-              />
-            </div>
+
           </div>
         </>
       ) : (
@@ -1598,11 +1639,9 @@ export function PropertiesPanel() {
         <div className="space-y-3">
           {[
             { key: "karaokeEnabled" as keyof AISettings, label: "Karaoke Word Highlight", desc: "Per-word sync using Whisper" },
-            { key: "visualizerEnabled" as keyof AISettings, label: "Audio Visualizer", desc: "Reactive bars" },
-            { key: "particlesEnabled" as keyof AISettings, label: "Particle Background", desc: "Subtle floating particles" },
-            { key: "beatPulseEnabled" as keyof AISettings, label: "Beat Pulse", desc: "Punch on word start" },
-            { key: "autoAnimateEnabled" as keyof AISettings, label: "Auto Animations", desc: "AI picks in/out" },
-            { key: "liveCssEnabled" as keyof AISettings, label: "Live CSS Animations", desc: "Inject NVIDIA NIM CSS" },
+            { key: "visualizerEnabled" as keyof AISettings, label: "Audio Visualizer", desc: "Reactive waveform bars" },
+            { key: "beatPulseEnabled" as keyof AISettings, label: "Beat Pulse", desc: "Scale punch on word start" },
+            { key: "autoAnimateEnabled" as keyof AISettings, label: "Auto Animations", desc: "AI picks in/out per segment" },
           ].map((t) => (
             <label key={t.key} className="flex items-start gap-3 rounded-xl bg-white/[0.03] p-3 hover:bg-white/[0.06] cursor-pointer">
               <input
@@ -1617,6 +1656,53 @@ export function PropertiesPanel() {
               </div>
             </label>
           ))}
+
+          {/* Particle Background — multi-style picker */}
+          <div className="rounded-xl bg-white/[0.03] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div>
+                <div className="text-xs font-medium text-white">Particle Background</div>
+                <div className="text-[11px] text-white/40">Choose a particle style</div>
+              </div>
+              {aiSettings.particlesEnabled && (
+                <button
+                  type="button"
+                  onClick={() => setAISettings({ particlesEnabled: false })}
+                  className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/50 hover:bg-white/20"
+                >
+                  Off
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-5 gap-1.5">
+              {([
+                { id: "dust",          label: "Dust",          icon: "·····",   colors: "from-white/20 to-white/5" },
+                { id: "stars",         label: "Stars",         icon: "✦✦✦",     colors: "from-yellow-300/30 to-indigo-400/20" },
+                { id: "rain",          label: "Rain",          icon: "│││││",   colors: "from-cyan-400/30 to-blue-500/20" },
+                { id: "fireflies",     label: "Firefly",       icon: "⬤⬤⬤",     colors: "from-lime-300/30 to-emerald-400/20" },
+                { id: "constellation", label: "Cosmo",         icon: "✦—✦",     colors: "from-violet-400/30 to-pink-400/20" },
+              ] as const).map((style) => {
+                const isActive = aiSettings.particlesEnabled && (aiSettings as any).particleStyle === style.id;
+                return (
+                  <button
+                    key={style.id}
+                    type="button"
+                    onClick={() => setAISettings({ particlesEnabled: true, particleStyle: style.id } as any)}
+                    className={`flex flex-col items-center gap-1 rounded-xl border p-2 transition ${
+                      isActive
+                        ? "border-white/50 bg-white/15"
+                        : "border-white/5 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.07]"
+                    }`}
+                  >
+                    <div className={`grid h-8 w-full place-items-center rounded-lg bg-gradient-to-br ${style.colors} text-[13px]`}>
+                      {style.icon}
+                    </div>
+                    <span className="text-[9px] text-white/50">{style.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1632,6 +1718,8 @@ import { useLyricStore } from "@/store/useLyricStore";
 import type { LyricBlock } from "@/types/project";
 import { cn } from "@/lib/cn";
 import { generateDeterministicWaveform } from "@/lib/audioUtils";
+import { audioEngine } from "@/lib/audioEngine";
+import { retimeBlock, formatTimecode } from "@/lib/timeUtils";
 import { Play, Pause, SkipBack, SkipForward, ZoomIn, ZoomOut, Layers } from "lucide-react";
 
 type DraggingState = {
@@ -1651,29 +1739,32 @@ export function Timeline() {
     setSelectedBlock,
     selectedBlockId,
     updateLyricBlock,
+    updateLyricBlocks,
     audioWaveform,
     pushHistory,
-    isPlaying,
-    setIsPlaying,
   } = useLyricStore();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [dragging, setDragging] = useState<DraggingState | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   const pixelsPerSecond = 120 * zoom;
-  const safeDuration = Math.max(audioDuration || 0, 10);
+  const safeDuration = Math.max(audioDuration || audioEngine.duration || 0, 10);
   const totalWidth = Math.max(safeDuration * pixelsPerSecond, 800);
 
   const fallbackWaveform = useMemo(() => generateDeterministicWaveform(160), []);
   const waveformData = audioWaveform.length > 0 ? audioWaveform : fallbackWaveform;
 
-  const formatTimecode = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 100);
-    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
-  };
+  useEffect(() => {
+    const unsub = audioEngine.subscribe((t, playing) => {
+      setIsPlaying(playing);
+      setCurrentTime(t);
+    });
+    return () => {
+      unsub();
+    };
+  }, [setCurrentTime]);
 
   const onPointerDownBlock = (e: React.PointerEvent, block: LyricBlock, mode: "move" | "left" | "right") => {
     e.stopPropagation();
@@ -1699,50 +1790,53 @@ export function Timeline() {
 
       const ds = dx / pixelsPerSecond;
       const orig = dragging.orig;
-      const maxAudioEnd = audioDuration > 0 ? audioDuration : 9999;
-      const minDuration = 0.2;
+      const maxAudioEnd = safeDuration;
 
-      let newBlock: LyricBlock = JSON.parse(JSON.stringify(orig));
+      let newStart = orig.startTime;
+      let newEnd = orig.endTime;
+      const patches: { id: string; patch: Partial<LyricBlock> }[] = [];
 
       if (dragging.mode === "move") {
         const dur = orig.endTime - orig.startTime;
-        let newStart = Math.max(0, orig.startTime + ds);
+        newStart = Math.max(0, orig.startTime + ds);
         if (newStart + dur > maxAudioEnd) {
           newStart = Math.max(0, maxAudioEnd - dur);
         }
-        const actualShift = newStart - orig.startTime;
-        newBlock.startTime = Number(newStart.toFixed(3));
-        newBlock.endTime = Number((newStart + dur).toFixed(3));
-        newBlock.words = orig.words.map((w) => ({
-          ...w,
-          start: Number(Math.max(0, w.start + actualShift).toFixed(3)),
-          end: Number(Math.max(0, w.end + actualShift).toFixed(3)),
-        }));
+        newEnd = newStart + dur;
+        const patch = retimeBlock(orig, newStart, newEnd, "move");
+        patches.push({ id: dragging.id, patch });
       } else if (dragging.mode === "left") {
-        let newStart = Math.max(0, orig.startTime + ds);
-        newStart = Math.min(newStart, orig.endTime - minDuration);
-        newBlock.startTime = Number(newStart.toFixed(3));
-        newBlock.words = orig.words
-          .filter((w) => w.end > newStart)
-          .map((w) => ({
-            ...w,
-            start: Number(Math.max(newStart, w.start).toFixed(3)),
-            end: Number(Math.max(newStart + 0.05, w.end).toFixed(3)),
-          }));
+        newStart = Math.max(0, Math.min(orig.startTime + ds, orig.endTime - 0.12));
+        const patch = retimeBlock(orig, newStart, orig.endTime, "scale");
+        patches.push({ id: dragging.id, patch });
       } else if (dragging.mode === "right") {
-        let newEnd = orig.endTime + ds;
-        newEnd = Math.max(orig.startTime + minDuration, Math.min(newEnd, maxAudioEnd));
-        newBlock.endTime = Number(newEnd.toFixed(3));
-        newBlock.words = orig.words
-          .filter((w) => w.start < newEnd)
-          .map((w) => ({
-            ...w,
-            start: Number(Math.min(newEnd - 0.05, w.start).toFixed(3)),
-            end: Number(Math.min(newEnd, w.end).toFixed(3)),
-          }));
+        newEnd = Math.max(orig.startTime + 0.12, Math.min(orig.endTime + ds, maxAudioEnd));
+        const patch = retimeBlock(orig, orig.startTime, newEnd, "scale");
+        patches.push({ id: dragging.id, patch });
       }
 
-      updateLyricBlock(dragging.id, newBlock);
+      const targetPatch = patches[0]?.patch;
+      if (targetPatch) {
+        const updatedTargetStart = targetPatch.startTime ?? newStart;
+        const updatedTargetEnd = targetPatch.endTime ?? newEnd;
+
+        const currentBlocks = [...useLyricStore.getState().lyricBlocks].sort((a, b) => a.startTime - b.startTime);
+        const idx = currentBlocks.findIndex((b) => b.id === dragging.id);
+
+        if (idx > 0) {
+          const pred = currentBlocks[idx - 1];
+          const predPatch = retimeBlock(pred, pred.startTime, updatedTargetStart, "scale");
+          patches.push({ id: pred.id, patch: predPatch });
+        }
+
+        if (idx < currentBlocks.length - 1) {
+          const succ = currentBlocks[idx + 1];
+          const succPatch = retimeBlock(succ, updatedTargetEnd, succ.endTime, "scale");
+          patches.push({ id: succ.id, patch: succPatch });
+        }
+
+        updateLyricBlocks(patches);
+      }
     };
 
     const onPointerUp = () => {
@@ -1758,15 +1852,15 @@ export function Timeline() {
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [dragging, pixelsPerSecond, audioDuration, updateLyricBlock]);
+  }, [dragging, pixelsPerSecond, safeDuration, updateLyricBlocks]);
 
   const onTimelineClick = (e: React.MouseEvent) => {
     if (dragging?.hasDragged) return;
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left + containerRef.current.scrollLeft;
-    const t = Math.max(0, Math.min(audioDuration > 0 ? audioDuration : 9999, x / pixelsPerSecond));
-    setCurrentTime(t);
+    const t = Math.max(0, Math.min(safeDuration, x / pixelsPerSecond));
+    audioEngine.seek(t);
   };
 
   const sortedBlocks = useMemo(() => {
@@ -1785,7 +1879,7 @@ export function Timeline() {
             <span>4-TRACK STUDIO TIMELINE</span>
           </div>
           <span className="rounded-full bg-white/10 px-2.5 py-0.5 font-mono text-[10px] text-white/60">
-            {lyricBlocks.length} segments • {(audioDuration || 0).toFixed(1)}s
+            {lyricBlocks.length} segments • {safeDuration.toFixed(1)}s
           </span>
         </div>
 
@@ -1794,7 +1888,7 @@ export function Timeline() {
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => setCurrentTime(0)}
+              onClick={() => audioEngine.seek(0)}
               className="p-1 rounded-md text-white/60 hover:text-white hover:bg-white/10"
               title="Jump to start"
             >
@@ -1802,7 +1896,7 @@ export function Timeline() {
             </button>
             <button
               type="button"
-              onClick={() => setIsPlaying(!isPlaying)}
+              onClick={() => audioEngine.toggle()}
               className="p-1.5 rounded-full bg-white text-black hover:scale-105 transition"
               title={isPlaying ? "Pause" : "Play"}
             >
@@ -1810,7 +1904,7 @@ export function Timeline() {
             </button>
             <button
               type="button"
-              onClick={() => setCurrentTime(safeDuration)}
+              onClick={() => audioEngine.seek(safeDuration)}
               className="p-1 rounded-md text-white/60 hover:text-white hover:bg-white/10"
               title="Jump to end"
             >
@@ -1908,10 +2002,11 @@ export function Timeline() {
 
             {/* 2. Track 📝 LYRICS */}
             <div className="relative h-10 w-full border-b border-white/10 bg-black/20">
-              {sortedBlocks.map((block, idx) => {
+              {sortedBlocks.map((block) => {
                 const left = block.startTime * pixelsPerSecond;
                 const width = Math.max(32, (block.endTime - block.startTime) * pixelsPerSecond);
                 const isSelected = selectedBlockId === block.id;
+                const isLowConfidence = block.confidence !== undefined && block.confidence < 0.65;
 
                 return (
                   <div
@@ -1922,6 +2017,8 @@ export function Timeline() {
                       "absolute top-1 bottom-1 flex cursor-grab items-center rounded-md border px-2 text-[10.5px] font-medium leading-none transition shadow-sm active:cursor-grabbing",
                       isSelected
                         ? "border-purple-400 bg-purple-600/80 text-white ring-2 ring-purple-400/60 z-20"
+                        : isLowConfidence
+                        ? "border-amber-500/70 bg-amber-500/20 text-amber-100"
                         : "border-purple-500/40 bg-gradient-to-r from-purple-900/60 to-indigo-900/40 text-purple-100 hover:border-purple-400/70"
                     )}
                   >
@@ -1980,446 +2077,185 @@ export function Timeline() {
 ================================================================================
 FILE: src\components\editor\VideoPreview.tsx
 ================================================================================
-import { useEffect, useRef, useState, useMemo } from "react";
-import { useLyricStore } from "@/store/useLyricStore";
-import { motion } from "framer-motion";
+"use client";
 
-export function VideoPreview({ onTimeUpdate }: { onTimeUpdate?: (t: number) => void }) {
+import { useEffect, useRef, useState } from "react";
+import { useLyricStore } from "@/store/useLyricStore";
+import { audioEngine } from "@/lib/audioEngine";
+import { renderFrame, hitTest, type BackgroundSource, type LayoutBox } from "@/lib/canvasRenderer";
+import { Play, Pause, SkipBack } from "lucide-react";
+
+const AR: Record<string, number> = { "16:9": 16 / 9, "9:16": 9 / 16, "1:1": 1, "4:5": 4 / 5, "21:9": 21 / 9 };
+
+export function VideoPreview() {
   const {
-    lyricBlocks,
-    backgroundAsset,
-    audioUrl,
-    currentTime,
-    isPlaying,
-    setCurrentTime,
-    setIsPlaying,
-    selectedBlockId,
-    setSelectedBlock,
-    updateBlockStyle,
-    aiSettings,
-    audioDuration,
-    aspectRatio,
-    pushHistory,
+    lyricBlocks, backgroundAsset, aiSettings, aspectRatio, resolution,
+    selectedBlockId, setSelectedBlock, updateBlockStyle, pushHistory,
+    audioDuration, currentTime, setCurrentTime,
   } = useLyricStore();
 
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const videoBgRef = useRef<HTMLVideoElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const lastPublishedTimeRef = useRef(0);
-  const storeTimeRef = useRef(currentTime);
-  const [draggingBlockId, setDraggingBlockId] = useState<string | null>(null);
-  const [canvasSize, setCanvasSize] = useState({ w: 1280, h: 720 });
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const bgVideoRef = useRef<HTMLVideoElement | null>(null);
+  const bgImgRef = useRef<HTMLImageElement | null>(null);
+  const boxesRef = useRef<LayoutBox[]>([]);
+  const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  const rafRef = useRef(0);
+  const stateRef = useRef({ lyricBlocks, aiSettings, backgroundAsset, selectedBlockId });
+  const [playing, setPlaying] = useState(false);
+  const [uiTime, setUiTime] = useState(0);
 
-  // Calculate container aspect ratio CSS class or inline style
-  const aspectStyle = useMemo(() => {
-    switch (aspectRatio) {
-      case "16:9":
-        return { aspectRatio: "16 / 9" };
-      case "9:16":
-        return { aspectRatio: "9 / 16" };
-      case "1:1":
-        return { aspectRatio: "1 / 1" };
-      case "4:5":
-        return { aspectRatio: "4 / 5" };
-      case "21:9":
-        return { aspectRatio: "21 / 9" };
-      default:
-        return { aspectRatio: "16 / 9" };
+  stateRef.current = { lyricBlocks, aiSettings, backgroundAsset, selectedBlockId };
+
+  const ratio = AR[aspectRatio] ?? 16 / 9;
+  const baseH = resolution === "3840x2160" ? 2160 : resolution === "1280x720" ? 720 : 1080;
+  const renderH = Math.min(1080, baseH);
+  const renderW = Math.round(renderH * ratio);
+
+  useEffect(() => {
+    bgVideoRef.current?.remove();
+    bgVideoRef.current = null;
+    bgImgRef.current = null;
+    if (!backgroundAsset?.url) return;
+
+    if (backgroundAsset.type === "video") {
+      const v = document.createElement("video");
+      v.src = backgroundAsset.url;
+      v.muted = true; v.loop = true; v.playsInline = true; v.preload = "auto";
+      bgVideoRef.current = v;
+      void v.play().catch(() => {});
+    } else if (backgroundAsset.type === "image") {
+      const img = new Image();
+      img.src = backgroundAsset.url;
+      bgImgRef.current = img;
     }
-  }, [aspectRatio]);
+  }, [backgroundAsset?.url, backgroundAsset?.type]);
 
   useEffect(() => {
-    const updateSize = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setCanvasSize({ w: rect.width, h: rect.height });
-      }
-    };
-    updateSize();
-    const observer = new ResizeObserver(updateSize);
-    if (containerRef.current) observer.observe(containerRef.current);
-    window.addEventListener("resize", updateSize);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", updateSize);
-    };
-  }, [aspectRatio]);
-
-  // Keep latest store time available in ref
-  useEffect(() => {
-    storeTimeRef.current = currentTime;
-  }, [currentTime]);
-
-  // rAF-based audio time publishing (replaces slow timeupdate)
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const stopFrameLoop = () => {
-      if (animationFrameRef.current !== null) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-    };
-
-    const publishAudioTime = () => {
-      const time = audio.currentTime;
-
-      // Avoid unnecessary Zustand updates while still keeping smooth sync.
-      if (Math.abs(time - lastPublishedTimeRef.current) >= 1 / 120) {
-        lastPublishedTimeRef.current = time;
-        setCurrentTime(time);
-        onTimeUpdate?.(time);
-      }
-
-      if (!audio.paused && !audio.ended) {
-        animationFrameRef.current =
-          requestAnimationFrame(publishAudioTime);
-      }
-    };
-
-    const handlePlay = () => {
-      stopFrameLoop();
-      animationFrameRef.current =
-        requestAnimationFrame(publishAudioTime);
-    };
-
-    const handlePause = () => {
-      stopFrameLoop();
-      setCurrentTime(audio.currentTime);
-    };
-
-    const handleEnded = () => {
-      stopFrameLoop();
-      setIsPlaying(false);
-
-      const endTime = Number.isFinite(audio.duration)
-        ? audio.duration
-        : audioDuration;
-
-      setCurrentTime(endTime || 0);
-    };
-
-    const handleError = () => {
-      stopFrameLoop();
-      setIsPlaying(false);
-    };
-
-    audio.addEventListener("play", handlePlay);
-    audio.addEventListener("pause", handlePause);
-    audio.addEventListener("ended", handleEnded);
-    audio.addEventListener("error", handleError);
-
-    return () => {
-      stopFrameLoop();
-      audio.removeEventListener("play", handlePlay);
-      audio.removeEventListener("pause", handlePause);
-      audio.removeEventListener("ended", handleEnded);
-      audio.removeEventListener("error", handleError);
-    };
-  }, [
-    audioUrl,
-    audioDuration,
-    onTimeUpdate,
-    setCurrentTime,
-    setIsPlaying,
-  ]);
-
-  // Separate play/pause sync effect
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    if (isPlaying) {
-      if (Math.abs(audio.currentTime - storeTimeRef.current) > 0.08) {
-        audio.currentTime = storeTimeRef.current;
-      }
-
-      void audio.play().catch(() => {
-        setIsPlaying(false);
-      });
-    } else {
-      audio.pause();
-    }
-  }, [isPlaying, audioUrl, setIsPlaying]);
-
-  // Background video sync — correct large drift only, not every frame
-  useEffect(() => {
-    const video = videoBgRef.current;
-    const audio = audioRef.current;
-
-    if (!video) return;
-
-    video.muted = true;
-    video.loop = true;
-
-    if (!isPlaying) {
-      video.pause();
-
-      if (
-        audio &&
-        Number.isFinite(video.duration) &&
-        video.duration > 0
-      ) {
-        const expectedTime = audio.currentTime % video.duration;
-
-        if (Math.abs(video.currentTime - expectedTime) > 0.15) {
-          video.currentTime = expectedTime;
-        }
-      }
-
-      return;
-    }
-
-    if (
-      audio &&
-      Number.isFinite(video.duration) &&
-      video.duration > 0
-    ) {
-      const expectedTime = audio.currentTime % video.duration;
-
-      // Correct only large drift. Do not seek every frame.
-      if (Math.abs(video.currentTime - expectedTime) > 0.35) {
-        video.currentTime = expectedTime;
-      }
-    }
-
-    void video.play().catch(() => {
-      // Background video failure must not stop audio playback.
+    let last = 0;
+    const unsub = audioEngine.subscribe((t, isPlaying) => {
+      setPlaying(isPlaying);
+      if (t - last > 0.03 || !isPlaying) { last = t; setUiTime(t); setCurrentTime(t); }
     });
-  }, [isPlaying, backgroundAsset?.url]);
+    return () => {
+      unsub();
+    };
+  }, [setCurrentTime]);
 
-  const visibleBlocks = lyricBlocks.filter(
-    (block) =>
-      currentTime >= block.startTime &&
-      currentTime < block.endTime
-  );
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = renderW;
+    canvas.height = renderH;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) return;
 
-  const handlePointerDown = (e: React.PointerEvent, blockId: string) => {
-    e.stopPropagation();
+    const draw = () => {
+      const s = stateRef.current;
+      const t = audioEngine.isPlaying ? audioEngine.time : useLyricStore.getState().currentTime;
+
+      let bg: BackgroundSource = { kind: "none" };
+      const a = s.backgroundAsset;
+      if (a?.type === "video" && bgVideoRef.current && bgVideoRef.current.readyState >= 2) {
+        const v = bgVideoRef.current;
+        if (audioEngine.isPlaying && v.paused) void v.play().catch(() => {});
+        if (!audioEngine.isPlaying && !v.paused) v.pause();
+        const dur = v.duration || 0;
+        if (dur > 0 && Math.abs(v.currentTime - (t % dur)) > 0.3) v.currentTime = t % dur;
+        bg = { kind: "media", source: v, w: v.videoWidth || 16, h: v.videoHeight || 9 };
+      } else if (a?.type === "image" && bgImgRef.current?.complete && bgImgRef.current.naturalWidth) {
+        bg = { kind: "media", source: bgImgRef.current, w: bgImgRef.current.naturalWidth, h: bgImgRef.current.naturalHeight };
+      } else if (a?.type === "gradient") {
+        bg = { kind: "gradient", from: a.gradientColors?.[0] || "#FF00FF", to: a.gradientColors?.[1] || "#00FFAB", angle: 135 };
+      } else if (a?.type === "solid") {
+        bg = { kind: "solid", color: a.solidColor || "#0A0A0F" };
+      } else if (a?.type === "particles") {
+        bg = { kind: "particles" };
+      }
+
+      boxesRef.current = renderFrame(ctx, {
+        time: t, width: renderW, height: renderH,
+        blocks: s.lyricBlocks, background: bg, ai: s.aiSettings,
+        amplitude: audioEngine.amplitudeAt(t), bass: audioEngine.amplitudeAt(t, "bass"),
+        selectedId: s.selectedBlockId, showGuides: true,
+      });
+      rafRef.current = requestAnimationFrame(draw);
+    };
+    rafRef.current = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [renderW, renderH]);
+
+  const toCanvas = (e: React.PointerEvent) => {
+    const r = canvasRef.current!.getBoundingClientRect();
+    return { x: ((e.clientX - r.left) / r.width) * renderW, y: ((e.clientY - r.top) / r.height) * renderH };
+  };
+
+  const onDown = (e: React.PointerEvent) => {
+    const p = toCanvas(e);
+    const id = hitTest(boxesRef.current, p.x, p.y);
+    setSelectedBlock(id);
+    if (!id) return;
+    const blk = lyricBlocks.find((b) => b.id === id);
+    if (!blk) return;
     pushHistory();
-    setSelectedBlock(blockId);
-    setDraggingBlockId(blockId);
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    dragRef.current = { id, dx: (blk.style.x / 100) * renderW - p.x, dy: (blk.style.y / 100) * renderH - p.y };
+    e.currentTarget.setPointerCapture(e.pointerId);
   };
 
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!draggingBlockId || !containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const x = Math.max(5, Math.min(95, ((e.clientX - rect.left) / rect.width) * 100));
-    const y = Math.max(5, Math.min(95, ((e.clientY - rect.top) / rect.height) * 100));
-    updateBlockStyle(draggingBlockId, { x: Number(x.toFixed(1)), y: Number(y.toFixed(1)) });
+  const onMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const p = toCanvas(e);
+    const x = Math.max(2, Math.min(98, ((p.x + d.dx) / renderW) * 100));
+    const y = Math.max(2, Math.min(98, ((p.y + d.dy) / renderH) * 100));
+    updateBlockStyle(d.id, { x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
-    if (draggingBlockId) {
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {}
-      setDraggingBlockId(null);
-    }
+  const onUp = () => { dragRef.current = null; };
+
+  const dur = audioDuration || audioEngine.duration || 60;
+  const timeStr = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    const cs = Math.floor((s % 1) * 100);
+    return `${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}.${cs.toString().padStart(2, "0")}`;
   };
 
   return (
-    <div className="flex h-full w-full items-center justify-center overflow-hidden p-2">
-      <div
-        ref={containerRef}
-        style={aspectStyle}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        className="relative max-h-full max-w-full overflow-hidden rounded-[20px] bg-black shadow-[0_20px_60px_rgba(0,0,0,0.6)] border border-white/10 select-none flex items-center justify-center"
-      >
-        {/* Background Layer */}
-        <div className="absolute inset-0 pointer-events-none">
-          {backgroundAsset?.type === "video" ? (
-            <video
-              ref={videoBgRef}
-              src={backgroundAsset.url}
-              className="h-full w-full object-cover"
-              muted
-              loop
-              playsInline
-            />
-          ) : backgroundAsset?.type === "image" ? (
-            <img src={backgroundAsset.url} className="h-full w-full object-cover" alt="Background" />
-          ) : backgroundAsset?.type === "gradient" ? (
-            <div
-              className="h-full w-full"
-              style={{
-                background: `linear-gradient(135deg, ${backgroundAsset.gradientColors?.[0] || "#FF00FF"}, ${
-                  backgroundAsset.gradientColors?.[1] || "#00FFAB"
-                })`,
-              }}
-            />
-          ) : backgroundAsset?.type === "solid" ? (
-            <div className="h-full w-full" style={{ background: backgroundAsset.solidColor || "#0A0A0F" }} />
-          ) : backgroundAsset?.type === "particles" ? (
-            <div className="h-full w-full bg-[#0A0A0F] relative">
-              <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_#2A1B4E_0%,_#0A0A0F_70%)]" />
-              <div className="absolute inset-0 opacity-60 bg-[radial-gradient(white_1px,_transparent_1px)] [background-size:24px_24px] animate-pulse" />
-            </div>
-          ) : (
-            <div className="h-full w-full bg-[radial-gradient(ellipse_at_center,_#1C1C2E_0%,_#0A0A0F_70%)]" />
-          )}
+    <div className="flex h-full w-full flex-col items-center justify-center gap-2">
+      <div ref={wrapRef} style={{ aspectRatio: `${ratio}` }} className="relative max-h-full max-w-full overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
+        <canvas
+          ref={canvasRef}
+          onPointerDown={onDown}
+          onPointerMove={onMove}
+          onPointerUp={onUp}
+          onPointerCancel={onUp}
+          className="block h-full w-full cursor-grab touch-none active:cursor-grabbing"
+        />
+      </div>
 
-          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/20" />
-        </div>
-
-        {/* Particles Overlay if enabled */}
-        {aiSettings.particlesEnabled && backgroundAsset?.type !== "particles" && (
-          <div className="pointer-events-none absolute inset-0 opacity-60">
-            <div className="absolute inset-0 bg-[radial-gradient(white_1px,_transparent_1px)] [background-size:24px_24px] animate-pulse" />
-          </div>
-        )}
-
-        {/* Audio Element */}
-        {audioUrl && <audio ref={audioRef} src={audioUrl} preload="auto" />}
-
-        {/* Lyric Blocks */}
-        {visibleBlocks.map((block) => {
-          const isSelected = selectedBlockId === block.id;
-
-          const wordElements = block.words.map((w, wi) => {
-            const active = aiSettings.karaokeEnabled && currentTime >= w.start && currentTime < w.end;
-            const past = aiSettings.karaokeEnabled && currentTime >= w.end;
-
-            return (
-              <span
-                key={wi}
-                style={{
-                  color: active ? "#FFD60A" : past ? block.style.color : `${block.style.color}CC`,
-                  textShadow: active ? "0 0 20px #FFD60A" : undefined,
-                  transform: active ? "scale(1.12)" : "scale(1)",
-                  display: "inline-block",
-                  marginRight: "0.22em",
-                  transition: "all 0.1s ease-out",
-                }}
-              >
-                {w.word}
-              </span>
-            );
-          });
-
-          return (
-            <motion.div
-              key={block.id}
-              onPointerDown={(e) => handlePointerDown(e, block.id)}
-              className={`absolute cursor-grab active:cursor-grabbing ${
-                isSelected ? "ring-2 ring-white/70 ring-offset-2 ring-offset-black rounded-lg" : ""
-              }`}
-              style={{
-                left: `${block.style.x}%`,
-                top: `${block.style.y}%`,
-                transform: "translate(-50%, -50%)",
-                fontFamily: block.style.fontFamily,
-                fontSize: `${Math.max(14, (block.style.fontSize / 1080) * canvasSize.h)}px`,
-                fontWeight: block.style.bold ? 800 : 600,
-                fontStyle: block.style.italic ? "italic" : "normal",
-                textTransform: block.style.uppercase ? "uppercase" : "none",
-                color: block.style.gradient?.enabled ? "transparent" : block.style.color,
-                backgroundImage: block.style.gradient?.enabled
-                  ? `linear-gradient(${block.style.gradient.angle}deg, ${block.style.gradient.from}, ${block.style.gradient.to})`
-                  : undefined,
-                WebkitBackgroundClip: block.style.gradient?.enabled ? "text" : undefined,
-                backgroundClip: block.style.gradient?.enabled ? "text" : undefined,
-                WebkitTextStroke:
-                  block.style.outlineWidth > 0
-                    ? `${(block.style.outlineWidth / 1080) * canvasSize.h}px ${block.style.outlineColor}`
-                    : undefined,
-                textShadow: [
-                  block.style.shadow ? `0 2px ${block.style.shadowBlur}px ${block.style.shadowColor}` : "",
-                  block.style.glow ? `0 0 20px ${block.style.glowColor}` : "",
-                ]
-                  .filter(Boolean)
-                  .join(", "),
-                textAlign: block.style.align,
-                lineHeight: 1.15,
-                maxWidth: "85%",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
-              {block.style.backgroundBox?.enabled && (
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: `-${block.style.backgroundBox.padding}px`,
-                    background: block.style.backgroundBox.color,
-                    opacity: block.style.backgroundBox.opacity,
-                    borderRadius: block.style.backgroundBox.radius,
-                    zIndex: -1,
-                  }}
-                />
-              )}
-              <div className="lyric-custom">
-                {aiSettings.karaokeEnabled && block.words.length > 0 ? wordElements : block.text}
-              </div>
-            </motion.div>
-          );
-        })}
-
-        {/* Visualizer */}
-        {aiSettings.visualizerEnabled && (
-          <div className="pointer-events-none absolute bottom-12 left-0 right-0 flex h-14 items-end gap-[2px] px-4 opacity-70">
-            {Array.from({ length: 48 }).map((_, i) => {
-              const barH = 10 + Math.abs(Math.sin(currentTime * 4 + i * 0.4)) * 44;
-              return (
-                <div
-                  key={i}
-                  className="flex-1 rounded-full bg-white/70"
-                  style={{ height: `${barH}px` }}
-                />
-              );
-            })}
-          </div>
-        )}
-
-        {/* Playhead Controls Overlay */}
-        <div className="absolute bottom-3 left-3 right-3 z-30 flex items-center gap-3 rounded-full bg-black/60 px-3 py-2 backdrop-blur border border-white/10">
-          <button
-            type="button"
-            onClick={() => setIsPlaying(!isPlaying)}
-            aria-label={isPlaying ? "Pause" : "Play"}
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black text-xs font-bold hover:bg-zinc-200 transition-colors"
-          >
-            {isPlaying ? "❚❚" : "▶"}
-          </button>
-          <div className="flex-1">
-            <input
-              type="range"
-              min={0}
-              max={audioDuration || 100}
-              step={0.01}
-              value={currentTime}
-              onPointerDown={() => {
-                if (audioRef.current && !audioRef.current.paused) {
-                  audioRef.current.pause();
-                }
-              }}
-              onChange={(e) => {
-                const nextTime = Number(e.target.value);
-                const audio = audioRef.current;
-
-                if (audio) {
-                  audio.currentTime = nextTime;
-                }
-
-                lastPublishedTimeRef.current = nextTime;
-                setCurrentTime(nextTime);
-                onTimeUpdate?.(nextTime);
-              }}
-              className="w-full accent-white cursor-pointer"
-            />
-          </div>
-          <div className="text-[11px] font-mono text-white/70">
-            {currentTime.toFixed(2)}s / {(audioDuration || 0).toFixed(1)}s
-          </div>
-        </div>
-
-        {/* Safe Margin Boundary */}
-        <div className="pointer-events-none absolute inset-[3%] rounded-xl border border-dashed border-white/10" />
+      <div className="flex w-full items-center gap-3 rounded-full border border-white/10 bg-black/60 px-3 py-2 backdrop-blur">
+        <button type="button" onClick={() => audioEngine.seek(0)} className="p-1 text-white/60 hover:text-white">
+          <SkipBack className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => audioEngine.toggle()}
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black hover:scale-105 transition"
+        >
+          {playing ? <Pause className="h-4 w-4 fill-black" /> : <Play className="h-4 w-4 fill-black ml-0.5" />}
+        </button>
+        <span className="font-mono text-xs text-white/80">{timeStr(uiTime)}</span>
+        <input
+          type="range"
+          min={0}
+          max={dur}
+          step={0.01}
+          value={uiTime}
+          onChange={(e) => audioEngine.seek(parseFloat(e.target.value))}
+          className="flex-1 accent-purple-500 cursor-pointer"
+        />
+        <span className="font-mono text-xs text-white/40">{timeStr(dur)}</span>
       </div>
     </div>
   );
@@ -2431,24 +2267,14 @@ FILE: src\components\export\ExportEngine.tsx
 ================================================================================
 import { useRef, useState, useEffect } from "react";
 import { useLyricStore } from "@/store/useLyricStore";
-import { getCanvasDimensions } from "@/lib/audioUtils";
+import { exportVideo, probeSupport } from "@/lib/exportEngine";
+import { audioEngine } from "@/lib/audioEngine";
 import { Button } from "@/components/ui/Button";
-
-function getSupportedMimeType(): string {
-  if (typeof MediaRecorder === "undefined") return "";
-  const candidates = [
-    "video/webm;codecs=vp9,opus",
-    "video/webm;codecs=vp8,opus",
-    "video/webm",
-  ];
-  return candidates.find((mime) => MediaRecorder.isTypeSupported(mime)) || "video/webm";
-}
 
 export function ExportEngine({ onDone }: { onDone?: (blob: Blob, url: string) => void }) {
   const {
     lyricBlocks,
     backgroundAsset,
-    audioUrl,
     audioDuration,
     aiSettings,
     resolution,
@@ -2456,14 +2282,17 @@ export function ExportEngine({ onDone }: { onDone?: (blob: Blob, url: string) =>
     aspectRatio,
   } = useLyricStore();
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const cancelRef = useRef(false);
-
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState<{ percent: number; stage: string; fps: number; eta: number }>({
+    percent: 0,
+    stage: "idle",
+    fps: 0,
+    eta: 0,
+  });
   const [isExporting, setIsExporting] = useState(false);
   const [exportedUrl, setExportedUrl] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const log = (m: string) => setLogs((l) => [...l.slice(-15), m]);
 
@@ -2478,22 +2307,18 @@ export function ExportEngine({ onDone }: { onDone?: (blob: Blob, url: string) =>
   }, [exportedUrl]);
 
   const cancelExport = () => {
-    cancelRef.current = true;
-    log("Cancelling export...");
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      log("Export cancellation requested...");
+    }
   };
 
   const startExport = async () => {
     if (isExporting) return;
 
     setErrorMsg(null);
-    cancelRef.current = false;
-
-    if (!audioUrl) {
-      log("No audio file present – exporting video in silent mode");
-    }
-
     setIsExporting(true);
-    setProgress(0);
+    setProgress({ percent: 0, stage: "initializing", fps: 0, eta: 0 });
 
     if (exportedUrl) {
       try {
@@ -2503,374 +2328,76 @@ export function ExportEngine({ onDone }: { onDone?: (blob: Blob, url: string) =>
     }
     setLogs([]);
 
-    const { w, h } = getCanvasDimensions(resolution, aspectRatio);
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      setIsExporting(false);
-      return;
+    const [wStr, hStr] = resolution.split("x");
+    let w = parseInt(wStr, 10) || 1920;
+    let h = parseInt(hStr, 10) || 1080;
+
+    // Adjust for aspect ratio
+    if (aspectRatio === "9:16") {
+      const temp = w;
+      w = h;
+      h = temp;
+    } else if (aspectRatio === "1:1") {
+      h = w;
+    } else if (aspectRatio === "4:5") {
+      h = Math.round(w * 1.25);
+    } else if (aspectRatio === "21:9") {
+      h = Math.round(w / 2.33);
     }
 
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      setIsExporting(false);
-      return;
-    }
-
-    log(`Target resolution: ${w}×${h} (${aspectRatio}) @ ${fps}fps`);
-    log(`Lyric blocks: ${lyricBlocks.length}, Audio duration: ${audioDuration.toFixed(2)}s`);
-
-    let bgVideo: HTMLVideoElement | null = null;
-    let bgImage: HTMLImageElement | null = null;
-    let audioEl: HTMLAudioElement | null = null;
-    let audioCtx: AudioContext | null = null;
-    let mediaStreamSource: MediaElementAudioSourceNode | null = null;
-    let recorder: MediaRecorder | null = null;
-    let animFrameId = 0;
+    const dur = Math.max(audioDuration || audioEngine.duration || 5, 2);
+    abortControllerRef.current = new AbortController();
 
     try {
-      // Prepare background
-      if (backgroundAsset?.type === "video" && backgroundAsset.url) {
-        bgVideo = document.createElement("video");
-        bgVideo.crossOrigin = "anonymous";
-        bgVideo.src = backgroundAsset.url;
-        bgVideo.muted = true;
-        bgVideo.loop = true;
-        bgVideo.playsInline = true;
-        await new Promise<void>((resolve) => {
-          if (!bgVideo) return resolve();
-          bgVideo.onloadedmetadata = () => resolve();
-          bgVideo.onerror = () => resolve();
-          setTimeout(resolve, 3000);
-        });
-        await bgVideo.play().catch(() => {});
-      } else if (backgroundAsset?.type === "image" && backgroundAsset.url) {
-        bgImage = new Image();
-        bgImage.crossOrigin = "anonymous";
-        bgImage.src = backgroundAsset.url;
-        await new Promise<void>((resolve) => {
-          if (!bgImage) return resolve();
-          bgImage.onload = () => resolve();
-          bgImage.onerror = () => resolve();
-          setTimeout(resolve, 3000);
-        });
-      }
+      log(`Starting WebCodecs MP4 Export · ${w}×${h} @ ${fps}fps · Duration ${dur.toFixed(1)}s`);
 
-      // Check canvas stream support
-      if (typeof (canvas as any).captureStream !== "function") {
-        throw new Error("Your browser does not support canvas.captureStream API.");
-      }
-
-      const canvasStream = (canvas as any).captureStream(fps) as MediaStream;
-      let combinedStream = canvasStream;
-
-      if (audioUrl) {
-        audioEl = new Audio(audioUrl);
-        audioEl.crossOrigin = "anonymous";
-        audioEl.preload = "auto";
-        await new Promise<void>((resolve) => {
-          if (!audioEl) return resolve();
-          audioEl.oncanplaythrough = () => resolve();
-          audioEl.onerror = () => resolve();
-          setTimeout(resolve, 3000);
-        });
-
-        try {
-          audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const dest = audioCtx.createMediaStreamDestination();
-          mediaStreamSource = audioCtx.createMediaElementSource(audioEl);
-          mediaStreamSource.connect(dest);
-
-          const audioTracks = dest.stream.getAudioTracks();
-          if (audioTracks.length > 0) {
-            combinedStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
-          }
-        } catch (e: any) {
-          log(`WebAudio stream capture warning: ${e.message}`);
-        }
-      }
-
-      const mimeType = getSupportedMimeType();
-      if (!mimeType) {
-        throw new Error("MediaRecorder API is not supported in this browser environment.");
-      }
-
-      log(`Using MIME type: ${mimeType}`);
-
-      const bitrate =
-        w >= 3840
-          ? 20_000_000
-          : w >= 1920
-          ? 10_000_000
-          : 5_000_000;
-      recorder = new MediaRecorder(combinedStream, {
-        mimeType,
-        videoBitsPerSecond: bitrate,
-        audioBitsPerSecond: 192_000,
+      const res = await exportVideo({
+        width: w,
+        height: h,
+        fps,
+        duration: dur,
+        blocks: lyricBlocks,
+        ai: aiSettings,
+        audioBuffer: audioEngine.audioBuffer,
+        amplitudeAt: (t, which) => audioEngine.amplitudeAt(t, which),
+        background: {
+          type: backgroundAsset?.type || "none",
+          url: backgroundAsset?.url,
+          solidColor: backgroundAsset?.solidColor,
+          gradientColors: backgroundAsset?.gradientColors,
+        },
+        quality: "best",
+        signal: abortControllerRef.current.signal,
+        onProgress: (p) => setProgress(p),
+        onLog: log,
       });
 
-      const chunks: Blob[] = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunks.push(e.data);
-      };
-
-      const exportPromise = new Promise<Blob>((resolve, reject) => {
-        if (!recorder) return reject(new Error("No MediaRecorder"));
-        recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType }));
-        recorder.onerror = (e: any) => reject(new Error(`Recording error: ${e.error?.message || "Unknown error"}`));
-      });
-
-      recorder.start(1000);
-      log("Real-time recording started...");
-
-      if (audioCtx && audioCtx.state === "suspended") {
-        await audioCtx.resume();
-      }
-
-      if (audioEl) {
-        audioEl.currentTime = 0;
-        await audioEl.play().catch(() => {});
-      }
-
-      const startTimeMs = performance.now();
-      const targetDuration = Math.max(audioDuration || 0, 5);
-
-      await new Promise<void>((resolve, reject) => {
-        const renderLoop = () => {
-          if (cancelRef.current) {
-            reject(new Error("Export cancelled by user"));
-            return;
-          }
-
-          const elapsedSec = audioEl ? audioEl.currentTime : (performance.now() - startTimeMs) / 1000;
-          const currentSec = Math.min(elapsedSec, targetDuration);
-          const currentProgress = Math.min(100, (currentSec / targetDuration) * 100);
-          setProgress(currentProgress);
-
-          // Clear Canvas
-          ctx.clearRect(0, 0, w, h);
-
-          // Render Background
-          if (bgVideo && bgVideo.readyState >= 2) {
-            if (
-              bgVideo.paused &&
-              currentSec < targetDuration
-            ) {
-              void bgVideo.play().catch(() => {});
-            }
-
-            try {
-              ctx.drawImage(bgVideo, 0, 0, w, h);
-            } catch {
-              // Ignore a temporarily unavailable video frame.
-            }
-          } else if (bgImage && bgImage.complete && bgImage.naturalWidth > 0) {
-            const imgRatio = bgImage.naturalWidth / bgImage.naturalHeight;
-            const canvasRatio = w / h;
-            let drawW = w;
-            let drawH = h;
-            let offsetX = 0;
-            let offsetY = 0;
-            if (imgRatio > canvasRatio) {
-              drawH = h;
-              drawW = imgRatio * h;
-              offsetX = (w - drawW) / 2;
-            } else {
-              drawW = w;
-              drawH = w / imgRatio;
-              offsetY = (h - drawH) / 2;
-            }
-            ctx.drawImage(bgImage, offsetX, offsetY, drawW, drawH);
-          } else if (backgroundAsset?.type === "gradient") {
-            const grad = ctx.createLinearGradient(0, 0, w, h);
-            grad.addColorStop(0, backgroundAsset.gradientColors?.[0] || "#FF00FF");
-            grad.addColorStop(1, backgroundAsset.gradientColors?.[1] || "#00FFAB");
-            ctx.fillStyle = grad;
-            ctx.fillRect(0, 0, w, h);
-          } else if (backgroundAsset?.type === "solid") {
-            ctx.fillStyle = backgroundAsset.solidColor || "#0A0A0F";
-            ctx.fillRect(0, 0, w, h);
-          } else {
-            ctx.fillStyle = "#0A0A0F";
-            ctx.fillRect(0, 0, w, h);
-          }
-
-          // Dark overlay gradient
-          const overlayGrad = ctx.createLinearGradient(0, 0, 0, h);
-          overlayGrad.addColorStop(0, "rgba(0,0,0,0.35)");
-          overlayGrad.addColorStop(0.5, "rgba(0,0,0,0.1)");
-          overlayGrad.addColorStop(1, "rgba(0,0,0,0.65)");
-          ctx.fillStyle = overlayGrad;
-          ctx.fillRect(0, 0, w, h);
-
-          // Render visible lyric blocks
-          const visible = lyricBlocks.filter(
-            (block) => currentSec >= block.startTime && currentSec < block.endTime
-          );
-          for (const block of visible) {
-            const durationIn = Math.max(0.1, block.animation.durationIn);
-            const pIn = Math.min(1, Math.max(0, (currentSec - block.startTime) / durationIn));
-            const alpha = pIn < 0.2 ? pIn * 5 : 1;
-            if (alpha <= 0) continue;
-
-            ctx.save();
-            ctx.globalAlpha = alpha;
-            const posX = (block.style.x / 100) * w;
-            const posY = (block.style.y / 100) * h;
-            ctx.translate(posX, posY);
-
-            if (block.animation.in === "pop") {
-              const scale = 0.7 + pIn * 0.3;
-              ctx.scale(scale, scale);
-            }
-
-            const fontSizeScale = w / 1920;
-            const fontSizePx = Math.max(14, block.style.fontSize * fontSizeScale);
-            ctx.font = `${block.style.bold ? "800" : "600"} ${fontSizePx}px ${block.style.fontFamily}, sans-serif`;
-            ctx.textAlign = block.style.align;
-            ctx.textBaseline = "middle";
-
-            if (block.style.shadow) {
-              ctx.shadowColor = block.style.shadowColor;
-              ctx.shadowBlur = block.style.shadowBlur * fontSizeScale;
-            }
-
-            if (block.style.glow) {
-              ctx.shadowColor = block.style.glowColor;
-              ctx.shadowBlur = 20 * fontSizeScale;
-            }
-
-            if (block.style.outlineWidth > 0) {
-              ctx.strokeStyle = block.style.outlineColor;
-              ctx.lineWidth = block.style.outlineWidth * 2 * fontSizeScale;
-              ctx.lineJoin = "round";
-            }
-
-            // Draw Background Box properly
-            if (block.style.backgroundBox?.enabled) {
-              const textMetrics = ctx.measureText(block.text);
-              const pad = block.style.backgroundBox.padding * fontSizeScale;
-              const boxW = textMetrics.width + pad * 2;
-              const boxH = fontSizePx * 1.35;
-              const alignOffset =
-                block.style.align === "left" ? 0 : block.style.align === "right" ? -boxW : -boxW / 2;
-
-              ctx.fillStyle = block.style.backgroundBox.color;
-              ctx.globalAlpha = block.style.backgroundBox.opacity * alpha;
-              ctx.beginPath();
-
-              if ("roundRect" in ctx && typeof ctx.roundRect === "function") {
-                ctx.roundRect(alignOffset, -boxH / 2, boxW, boxH, block.style.backgroundBox.radius * fontSizeScale);
-              } else {
-                ctx.fillRect(alignOffset, -boxH / 2, boxW, boxH);
-              }
-              ctx.fill();
-              ctx.globalAlpha = alpha;
-            }
-
-            // Draw Karaoke Words or Block Text
-            if (aiSettings.karaokeEnabled && block.words.length > 0) {
-              const fullWidth = ctx.measureText(block.text).width;
-              let cursorX =
-                block.style.align === "center" ? -fullWidth / 2 : block.style.align === "right" ? -fullWidth : 0;
-
-              for (const word of block.words) {
-                const wordToken = word.word + " ";
-                const wordW = ctx.measureText(wordToken).width;
-                const isActive = currentSec >= word.start && currentSec < word.end;
-                const isPast = currentSec >= word.end;
-
-                ctx.fillStyle = isActive ? "#FFD60A" : isPast ? block.style.color : `${block.style.color}CC`;
-
-                if (block.style.outlineWidth > 0) {
-                  ctx.strokeText(wordToken, cursorX, 0);
-                }
-                ctx.fillText(wordToken, cursorX, 0);
-                cursorX += wordW;
-              }
-            } else {
-              ctx.fillStyle = block.style.color;
-              const lines = block.text.split("\n");
-              lines.forEach((lineText, i) => {
-                const yOffset = (i - (lines.length - 1) / 2) * fontSizePx * 1.2;
-                if (block.style.outlineWidth > 0) {
-                  ctx.strokeText(lineText, 0, yOffset);
-                }
-                ctx.fillText(lineText, 0, yOffset);
-              });
-            }
-
-            ctx.restore();
-          }
-
-          // Deterministic Audio Visualizer
-          if (aiSettings.visualizerEnabled) {
-            ctx.save();
-            const barCount = 48;
-            const barW = w / barCount;
-            for (let i = 0; i < barCount; i++) {
-              const hBar = 15 + Math.abs(Math.sin(currentSec * 4 + i * 0.4)) * 75;
-              ctx.fillStyle = `rgba(255,255,255,0.7)`;
-              ctx.fillRect(i * barW + 2, h - hBar - 12, barW - 4, hBar);
-            }
-            ctx.restore();
-          }
-
-          if (currentSec >= targetDuration || (audioEl && audioEl.ended)) {
-            resolve();
-            return;
-          }
-
-          animFrameId = requestAnimationFrame(renderLoop);
-        };
-
-        renderLoop();
-      });
-
-      if (recorder && recorder.state !== "inactive") {
-        recorder.stop();
-      }
-
-      const finalBlob = await exportPromise;
-      const finalUrl = URL.createObjectURL(finalBlob);
-      setExportedUrl(finalUrl);
-      setProgress(100);
-      log(`Export clean success: ${(finalBlob.size / 1024 / 1024).toFixed(2)} MB WEBM`);
-      onDone?.(finalBlob, finalUrl);
+      const url = URL.createObjectURL(res.blob);
+      setExportedUrl(url);
+      onDone?.(res.blob, url);
     } catch (err: any) {
-      log(`Export failed: ${err.message}`);
-      setErrorMsg(err.message || "Browser recording failed.");
+      if (err.name === "AbortError") {
+        log("Export cancelled.");
+      } else {
+        log(`Export failed: ${err.message}`);
+        setErrorMsg(err.message || "Video export failed.");
+      }
     } finally {
-      if (animFrameId) cancelAnimationFrame(animFrameId);
-      if (audioEl) {
-        try { audioEl.pause(); } catch {}
-      }
-      if (bgVideo) {
-        try { bgVideo.pause(); } catch {}
-      }
-      if (mediaStreamSource) {
-        try { mediaStreamSource.disconnect(); } catch {}
-      }
-      if (audioCtx && audioCtx.state !== "closed") {
-        try { await audioCtx.close(); } catch {}
-      }
       setIsExporting(false);
+      abortControllerRef.current = null;
     }
   };
 
   return (
     <div className="space-y-4">
-      <canvas ref={canvasRef} className="hidden" />
-
       <div className="flex flex-wrap items-center gap-3">
         <Button
           onClick={startExport}
           disabled={isExporting}
           loading={isExporting}
-          className="rounded-full font-bold px-6"
+          className="rounded-full font-bold px-6 bg-gradient-to-r from-purple-600 to-indigo-600 shadow-lg"
         >
-          ● REC Export {resolution} @ {fps}fps
+          🎬 Export MP4 Video ({resolution} @ {fps}fps)
         </Button>
 
         {isExporting && (
@@ -2879,8 +2406,8 @@ export function ExportEngine({ onDone }: { onDone?: (blob: Blob, url: string) =>
           </Button>
         )}
 
-        <div className="rounded-full border border-white/10 bg-black/40 px-4 py-2 text-xs text-white/70">
-          Format: WEBM (browser MediaRecorder)
+        <div className="rounded-full border border-purple-500/30 bg-purple-500/10 px-4 py-2 text-xs font-mono text-purple-300">
+          Engine: WebCodecs + MP4 Muxer (Deterministic 60FPS)
         </div>
       </div>
 
@@ -2893,13 +2420,17 @@ export function ExportEngine({ onDone }: { onDone?: (blob: Blob, url: string) =>
       {isExporting && (
         <div className="rounded-2xl border border-white/10 bg-[#14141C] p-4 space-y-3">
           <div className="flex justify-between text-xs">
-            <span className="text-white/60">Recording real-time browser stream…</span>
-            <span className="font-mono font-bold text-white">{progress.toFixed(1)}%</span>
+            <span className="text-white/60 font-semibold">{progress.stage}</span>
+            <span className="font-mono font-bold text-purple-300">{progress.percent.toFixed(1)}%</span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
-            <div className="h-full bg-white transition-all duration-150" style={{ width: `${progress}%` }} />
+          <div className="h-2.5 w-full overflow-hidden rounded-full bg-white/10">
+            <div className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-150" style={{ width: `${progress.percent}%` }} />
           </div>
-          <div className="font-mono text-[11px] text-white/40 max-h-[100px] overflow-auto space-y-1">
+          <div className="flex justify-between text-[11px] font-mono text-white/40">
+            <span>{progress.fps > 0 ? `${progress.fps.toFixed(0)} FPS render speed` : ""}</span>
+            <span>{progress.eta > 0 ? `~${progress.eta.toFixed(0)}s remaining` : ""}</span>
+          </div>
+          <div className="font-mono text-[11px] text-white/40 max-h-[120px] overflow-auto space-y-1 border-t border-white/5 pt-2">
             {logs.map((l, i) => (
               <div key={i}>› {l}</div>
             ))}
@@ -2910,8 +2441,8 @@ export function ExportEngine({ onDone }: { onDone?: (blob: Blob, url: string) =>
       {exportedUrl && (
         <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-bold text-emerald-300">✅ Video Export Ready</span>
-            <span className="text-xs text-white/40">WebM format</span>
+            <span className="text-sm font-bold text-emerald-300">✅ MP4 Video Export Ready</span>
+            <span className="text-xs text-emerald-400/80 font-mono">H.264 / AAC MP4</span>
           </div>
 
           <video src={exportedUrl} controls className="w-full rounded-xl bg-black max-h-[400px]" />
@@ -2919,10 +2450,10 @@ export function ExportEngine({ onDone }: { onDone?: (blob: Blob, url: string) =>
           <div className="flex flex-wrap gap-2">
             <a
               href={exportedUrl}
-              download={`lyrical-video-${Date.now()}.webm`}
-              className="inline-flex items-center justify-center rounded-full bg-white px-6 py-2.5 text-xs font-bold text-black hover:bg-zinc-200 transition-colors"
+              download={`lyricforge-${Date.now()}.mp4`}
+              className="inline-flex items-center justify-center rounded-full bg-emerald-400 px-6 py-2.5 text-xs font-bold text-black hover:bg-emerald-300 transition-colors shadow-lg"
             >
-              Download WEBM Video
+              Download MP4 Video
             </a>
             <button
               type="button"
@@ -2933,10 +2464,6 @@ export function ExportEngine({ onDone }: { onDone?: (blob: Blob, url: string) =>
             >
               Open in New Tab
             </button>
-          </div>
-
-          <div className="text-[11px] text-white/40 leading-relaxed border-t border-white/10 pt-3">
-            💡 For MP4 conversion, run locally: <code className="text-white/80 bg-black/40 px-1.5 py-0.5 rounded">ffmpeg -i lyrical-video.webm -c:v libx264 -crf 18 -c:a aac output.mp4</code>
           </div>
         </div>
       )}
@@ -3275,6 +2802,10 @@ import {
 
 const TOOLS = [Type, Sparkles, ImageIcon, Music, Layers, Settings2];
 
+const WAVEFORM_BARS = Array.from({ length: 140 }, (_, index) =>
+  `${(18 + Math.abs(Math.sin(index * 0.5)) * 60 + (index % 7) * 3).toFixed(4)}%`
+);
+
 const SEGMENTS = [
   { text: "We were younger than the streetlights", left: 2, width: 20, low: false },
   { text: "Counting stars we couldn't see", left: 23.5, width: 17, low: false },
@@ -3435,12 +2966,10 @@ export default function EditorShowcase() {
 
               <TrackRow label="🎵 audio">
                 <div className="flex h-full items-center gap-[2px] px-1">
-                  {Array.from({ length: 140 }).map((_, index) => (
+                  {WAVEFORM_BARS.map((height, index) => (
                     <span
                       key={index}
-                      style={{
-                        height: `${18 + Math.abs(Math.sin(index * 0.5)) * 60 + (index % 7) * 3}%`,
-                      }}
+                      style={{ height }}
                       className="w-full rounded-[1px] bg-gradient-to-t from-forge-secondary/40 to-forge-accent/70"
                     />
                   ))}
@@ -5708,23 +5237,12 @@ FILE: src\components\landing\Nav.tsx
 "use client";
 
 import { motion, useScroll, useTransform } from "framer-motion";
-import { AudioWaveform, Braces, Menu, X } from "lucide-react";
-import { useState } from "react";
-
-const LINKS = [
-  { href: "#pipeline", label: "Pipeline" },
-  { href: "#forge", label: "Live demo" },
-  { href: "#editor", label: "Editor" },
-  { href: "#animations", label: "Animations" },
-  { href: "#pricing", label: "Pricing" },
-  { href: "#roadmap", label: "Roadmap" },
-];
+import { AudioWaveform } from "lucide-react";
 
 export default function Nav() {
   const { scrollY } = useScroll();
   const background = useTransform(scrollY, [0, 120], ["rgba(7,7,12,0)", "rgba(10,10,15,0.82)"]);
   const borderColor = useTransform(scrollY, [0, 120], ["rgba(42,42,62,0)", "rgba(42,42,62,1)"]);
-  const [open, setOpen] = useState(false);
 
   return (
     <motion.header
@@ -5732,7 +5250,7 @@ export default function Nav() {
       className="fixed inset-x-0 top-0 z-50 border-b backdrop-blur-xl"
     >
       <nav className="mx-auto flex max-w-7xl items-center justify-between px-5 py-3.5 sm:px-8">
-        <a href="#top" className="group flex items-center gap-2.5">
+        <a href="/" className="group flex items-center gap-2.5">
           <span className="relative grid size-9 place-items-center rounded-[10px] bg-gradient-to-br from-forge-primary to-forge-accent shadow-[0_0_22px_rgba(124,58,237,0.45)]">
             <AudioWaveform className="size-5 text-white" strokeWidth={2.2} />
           </span>
@@ -5742,58 +5260,13 @@ export default function Nav() {
           </span>
         </a>
 
-        <div className="hidden items-center gap-1 lg:flex">
-          {LINKS.map((link) => (
-            <a
-              key={link.href}
-              href={link.href}
-              className="rounded-lg px-3 py-2 text-sm text-forge-muted transition-colors duration-200 hover:bg-white/5 hover:text-white"
-            >
-              {link.label}
-            </a>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <a
-            href="#waitlist"
-            className="hidden items-center gap-2 rounded-lg border border-forge-border bg-forge-surface/80 px-3.5 py-2 text-sm text-forge-muted transition hover:border-forge-primary/60 hover:text-white sm:inline-flex"
-          >
-            <Braces className="size-4" /> Source access
-          </a>
-          <a
-            href="/studio"
-            className="rounded-lg bg-gradient-to-r from-forge-primary to-forge-secondary px-4 py-2 text-sm font-medium text-white transition duration-200 hover:glow-primary hover:brightness-110"
-          >
-            Launch Studio →
-          </a>
-          <button
-            type="button"
-            aria-label="Toggle menu"
-            onClick={() => setOpen((value) => !value)}
-            className="grid size-9 place-items-center rounded-lg border border-forge-border text-forge-muted lg:hidden"
-          >
-            {open ? <X className="size-4" /> : <Menu className="size-4" />}
-          </button>
-        </div>
+        <a
+          href="/studio"
+          className="rounded-lg bg-gradient-to-r from-forge-primary to-forge-secondary px-4 py-2 text-sm font-medium text-white transition duration-200 hover:glow-primary hover:brightness-110"
+        >
+          Launch Studio →
+        </a>
       </nav>
-
-      {open ? (
-        <div className="border-t border-forge-border/70 bg-forge-bg/95 px-5 py-3 lg:hidden">
-          <div className="grid grid-cols-2 gap-1">
-            {LINKS.map((link) => (
-              <a
-                key={link.href}
-                href={link.href}
-                onClick={() => setOpen(false)}
-                className="rounded-lg px-3 py-2 text-sm text-forge-muted hover:bg-white/5 hover:text-white"
-              >
-                {link.label}
-              </a>
-            ))}
-          </div>
-        </div>
-      ) : null}
     </motion.header>
   );
 }
@@ -10532,6 +10005,234 @@ export const PRESET_CATEGORIES: Array<{ id: PresetCategory | "all"; label: strin
 
 
 ================================================================================
+FILE: src\lib\audioEngine.ts
+================================================================================
+type Listener = (time: number, playing: boolean) => void;
+
+const ENVELOPE_RATE = 100; // samples per second
+
+class AudioEngine {
+  private ctx: AudioContext | null = null;
+  private buffer: AudioBuffer | null = null;
+  private source: AudioBufferSourceNode | null = null;
+  private gain: GainNode | null = null;
+  private startedAtCtx = 0;
+  private startOffset = 0;
+  private playing = false;
+  private raf = 0;
+  private listeners = new Set<Listener>();
+
+  envelope = new Float32Array(0);
+  bassEnvelope = new Float32Array(0);
+  peaks: number[] = [];
+  duration = 0;
+
+  private ensureCtx() {
+    if (!this.ctx) {
+      this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      this.gain = this.ctx.createGain();
+      this.gain.connect(this.ctx.destination);
+    }
+    return this.ctx;
+  }
+
+  async load(file: File | ArrayBuffer, peakCount = 1200) {
+    const ctx = this.ensureCtx();
+    const bytes = file instanceof File ? await file.arrayBuffer() : file;
+    this.stop();
+    this.buffer = await ctx.decodeAudioData(bytes.slice(0));
+    this.duration = this.buffer.duration;
+    this.computeEnvelopes();
+    this.peaks = this.computePeaks(peakCount);
+    this.startOffset = 0;
+    this.emit();
+    return { duration: this.duration, peaks: this.peaks };
+  }
+
+  private computeEnvelopes() {
+    if (!this.buffer) return;
+    const data = this.buffer.getChannelData(0);
+    const sr = this.buffer.sampleRate;
+    const n = Math.ceil(this.buffer.duration * ENVELOPE_RATE);
+    const block = Math.max(1, Math.floor(sr / ENVELOPE_RATE));
+    const env = new Float32Array(n);
+    const bass = new Float32Array(n);
+    let lp = 0;
+    for (let i = 0; i < n; i++) {
+      let sum = 0;
+      let bassSum = 0;
+      const off = i * block;
+      for (let j = 0; j < block && off + j < data.length; j++) {
+        const s = data[off + j];
+        sum += s * s;
+        lp += (s - lp) * 0.02; // crude ~150Hz one-pole low pass
+        bassSum += lp * lp;
+      }
+      env[i] = Math.sqrt(sum / block);
+      bass[i] = Math.sqrt(bassSum / block);
+    }
+    const norm = (a: Float32Array) => {
+      let max = 1e-6;
+      for (const v of a) max = Math.max(max, v);
+      for (let i = 0; i < a.length; i++) a[i] = Math.min(1, a[i] / max);
+    };
+    norm(env);
+    norm(bass);
+    this.envelope = env;
+    this.bassEnvelope = bass;
+  }
+
+  private computePeaks(count: number) {
+    if (!this.buffer) return [];
+    const data = this.buffer.getChannelData(0);
+    const block = Math.max(1, Math.floor(data.length / count));
+    const out: number[] = [];
+    let max = 1e-6;
+    for (let i = 0; i < count; i++) {
+      let peak = 0;
+      const off = i * block;
+      for (let j = 0; j < block && off + j < data.length; j += 8) {
+        peak = Math.max(peak, Math.abs(data[off + j]));
+      }
+      max = Math.max(max, peak);
+      out.push(peak);
+    }
+    return out.map((v) => Number((v / max).toFixed(3)));
+  }
+
+  amplitudeAt(t: number, which: "rms" | "bass" = "rms") {
+    const src = which === "bass" ? this.bassEnvelope : this.envelope;
+    if (!src.length) return 0;
+    const i = clampInt(Math.floor(t * ENVELOPE_RATE), 0, src.length - 1);
+    return src[i];
+  }
+
+  get time() {
+    if (!this.playing || !this.ctx) return this.startOffset;
+    const t = this.startOffset + (this.ctx.currentTime - this.startedAtCtx);
+    return this.duration ? Math.min(t, this.duration) : t;
+  }
+
+  get isPlaying() {
+    return this.playing;
+  }
+
+  get audioBuffer() {
+    return this.buffer;
+  }
+
+  async play() {
+    if (this.playing) return;
+    const ctx = this.ensureCtx();
+    if (ctx.state === "suspended") await ctx.resume();
+
+    if (!this.buffer) {
+      // Silent mode: advance clock for preview animation.
+      this.startedAtCtx = ctx.currentTime;
+      this.playing = true;
+      this.loop();
+      return;
+    }
+    if (this.startOffset >= this.duration - 0.01) this.startOffset = 0;
+
+    const src = ctx.createBufferSource();
+    src.buffer = this.buffer;
+    src.connect(this.gain!);
+    src.onended = () => {
+      if (this.source === src && this.playing) {
+        this.playing = false;
+        this.startOffset = this.duration;
+        this.emit();
+      }
+    };
+    src.start(0, this.startOffset);
+    this.source = src;
+    this.startedAtCtx = ctx.currentTime;
+    this.playing = true;
+    this.loop();
+  }
+
+  pause() {
+    if (!this.playing) return;
+    this.startOffset = this.time;
+    this.playing = false;
+    this.stopSource();
+    cancelAnimationFrame(this.raf);
+    this.emit();
+  }
+
+  toggle() {
+    return this.playing ? (this.pause(), false) : (void this.play(), true);
+  }
+
+  seek(t: number) {
+    const target = this.duration ? Math.max(0, Math.min(t, this.duration)) : Math.max(0, t);
+    const wasPlaying = this.playing;
+    if (wasPlaying) {
+      this.stopSource();
+      this.playing = false;
+    }
+    this.startOffset = target;
+    if (wasPlaying) void this.play();
+    else this.emit();
+  }
+
+  setVolume(v: number) {
+    if (this.gain) this.gain.gain.value = Math.max(0, Math.min(1, v));
+  }
+
+  stop() {
+    this.stopSource();
+    this.playing = false;
+    cancelAnimationFrame(this.raf);
+  }
+
+  private stopSource() {
+    if (this.source) {
+      try {
+        this.source.onended = null;
+        this.source.stop();
+        this.source.disconnect();
+      } catch {}
+      this.source = null;
+    }
+  }
+
+  private loop = () => {
+    if (!this.playing) return;
+    this.emit();
+    if (this.duration && this.time >= this.duration) {
+      this.playing = false;
+      this.startOffset = this.duration;
+      this.stopSource();
+      this.emit();
+      return;
+    }
+    this.raf = requestAnimationFrame(this.loop);
+  };
+
+  subscribe(fn: Listener) {
+    this.listeners.add(fn);
+    fn(this.time, this.playing);
+    return () => {
+      this.listeners.delete(fn);
+    };
+  }
+
+  private emit() {
+    const t = this.time;
+    for (const fn of this.listeners) fn(t, this.playing);
+  }
+}
+
+function clampInt(v: number, a: number, b: number) {
+  return v < a ? a : v > b ? b : v;
+}
+
+export const audioEngine = new AudioEngine();
+
+
+================================================================================
 FILE: src\lib\audioUtils.ts
 ================================================================================
 import type { AspectRatio, Resolution } from "@/types/project";
@@ -10698,6 +10399,544 @@ export async function loadCustomFont(file: File): Promise<string> {
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
+}
+
+
+================================================================================
+FILE: src\lib\canvasRenderer.ts
+================================================================================
+import type { AISettings, LyricBlock } from "@/types/project";
+
+export const DESIGN_HEIGHT = 1080;
+
+export type BackgroundSource =
+  | { kind: "none" }
+  | { kind: "solid"; color: string }
+  | { kind: "gradient"; from: string; to: string; angle: number }
+  | { kind: "particles" }
+  | { kind: "media"; source: CanvasImageSource; w: number; h: number };
+
+export type RenderOptions = {
+  time: number;
+  width: number;
+  height: number;
+  blocks: LyricBlock[];
+  background: BackgroundSource;
+  ai: AISettings;
+  amplitude: number;
+  bass: number;
+  selectedId?: string | null;
+  showGuides?: boolean;
+  vignette?: boolean;
+  particleStyle?: "dust" | "stars" | "rain" | "fireflies" | "constellation";
+};
+
+export type LayoutBox = { id: string; x: number; y: number; w: number; h: number };
+
+/* ---------- easing ---------- */
+const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+const easeOutBack = (t: number) => {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+};
+const easeOutBounce = (t: number) => {
+  const n1 = 7.5625, d1 = 2.75;
+  if (t < 1 / d1) return n1 * t * t;
+  if (t < 2 / d1) return n1 * (t -= 1.5 / d1) * t + 0.75;
+  if (t < 2.5 / d1) return n1 * (t -= 2.25 / d1) * t + 0.9375;
+  return n1 * (t -= 2.625 / d1) * t + 0.984375;
+};
+
+/** deterministic hash → pseudo random 0..1 (identical in preview and export) */
+function rand(seed: number) {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+type Xform = { opacity: number; dx: number; dy: number; sx: number; sy: number; rot: number; skew: number; clip: number; blur: number };
+const IDENT: Xform = { opacity: 1, dx: 0, dy: 0, sx: 1, sy: 1, rot: 0, skew: 0, clip: 1, blur: 0 };
+
+function animation(name: string, p: number, dir: "in" | "out", seed: number, unit: number): Xform {
+  const q = dir === "out" ? 1 - p : p;
+  const x = { ...IDENT, opacity: q };
+  switch (name) {
+    // ── none ──────────────────────────────────────────
+    case "none": return { ...IDENT };
+
+    // ── legacy camelCase (kept for backwards compat) ──
+    case "fade": return x;
+    case "pop": return { ...x, opacity: Math.min(1, q * 4), sx: 0.4 + easeOutBack(q) * 0.6, sy: 0.4 + easeOutBack(q) * 0.6 };
+    case "zoom": return { ...x, sx: 1.8 - 0.8 * easeOutCubic(q), sy: 1.8 - 0.8 * easeOutCubic(q) };
+    case "slideUp": return { ...x, dy: (1 - easeOutCubic(q)) * 0.9 * unit };
+    case "slideDown": return { ...x, dy: -(1 - easeOutCubic(q)) * 0.9 * unit };
+    case "slideLeft": return { ...x, dx: (1 - easeOutCubic(q)) * 1.4 * unit };
+    case "slideRight": return { ...x, dx: -(1 - easeOutCubic(q)) * 1.4 * unit };
+    case "bounce": return { ...IDENT, opacity: Math.min(1, q * 5), dy: (1 - easeOutBounce(q)) * -1.1 * unit };
+    case "kinetic": return { ...x, rot: (1 - easeOutCubic(q)) * -0.14, sx: 0.8 + easeOutCubic(q) * 0.2, sy: 0.8 + easeOutCubic(q) * 0.2 };
+    case "glitch": {
+      const r = rand(seed);
+      return { ...IDENT, opacity: q > 0.12 ? 1 : 0, dx: q < 1 ? (r - 0.5) * 0.35 * unit : 0, skew: q < 1 ? (rand(seed + 7) - 0.5) * 0.35 : 0, blur: 0 };
+    }
+    case "typewriter": return { ...IDENT, clip: easeOutCubic(q), blur: 0 };
+
+    // ── basic ─────────────────────────────────────────
+    case "fade-in":   return { ...IDENT, opacity: q };
+    case "fade-out":  return { ...IDENT, opacity: 1 - p };
+    case "slide-up":  return { ...x, dy: (1 - easeOutCubic(q)) * 0.9 * unit };
+    case "slide-down": return { ...x, dy: -(1 - easeOutCubic(q)) * 0.9 * unit };
+    case "slide-left": return { ...x, dx: (1 - easeOutCubic(q)) * 1.4 * unit };
+    case "slide-right": return { ...x, dx: -(1 - easeOutCubic(q)) * 1.4 * unit };
+    case "blur-in":   return { ...x, blur: (1 - easeOutCubic(q)) * 18 };
+    case "soft-rise": return { ...x, dy: (1 - easeOutCubic(q)) * 0.4 * unit, sx: 0.97 + easeOutCubic(q) * 0.03, sy: 0.97 + easeOutCubic(q) * 0.03 };
+
+    // ── bounce ────────────────────────────────────────
+    case "pop-in":    return { ...x, opacity: Math.min(1, q * 4), sx: 0.4 + easeOutBack(q) * 0.6, sy: 0.4 + easeOutBack(q) * 0.6 };
+    case "bounce-in": return { ...IDENT, opacity: Math.min(1, q * 5), dy: (1 - easeOutBounce(q)) * -1.1 * unit, blur: 0 };
+    case "elastic-in": {
+      const sq = q < 0.45 ? easeOutBack(q / 0.45) : 1;
+      return { ...x, sx: 0.3 + sq * 0.85, sy: 1.55 - sq * 0.55, blur: 0 };
+    }
+    case "swing":     return { ...x, rot: (1 - easeOutCubic(q)) * -0.24 };
+    case "shake-in": {
+      const shakes = [0, -8, 8, -5, 5, -3, 3, 0];
+      return { ...x, opacity: Math.min(1, q * 5), dx: (shakes[Math.min(7, Math.floor(q * 8))] || 0) * 0.012 * unit };
+    }
+
+    // ── zoom ──────────────────────────────────────────
+    case "scale-in":  return { ...x, sx: 0.85 + easeOutCubic(q) * 0.15, sy: 0.85 + easeOutCubic(q) * 0.15 };
+    case "zoom-out":  return { ...IDENT, opacity: 1 - easeOutCubic(p), sx: 1 + easeOutCubic(p) * 0.4, sy: 1 + easeOutCubic(p) * 0.4 };
+    case "punch-zoom": return { ...x, opacity: Math.min(1, q * 3), sx: 1.6 - easeOutBack(q) * 0.6, sy: 1.6 - easeOutBack(q) * 0.6 };
+    case "depth-push": return { ...x, sx: 0.4 + easeOutCubic(q) * 0.6, sy: 0.4 + easeOutCubic(q) * 0.6, dy: (1 - easeOutCubic(q)) * 0.5 * unit };
+
+    // ── rotate ────────────────────────────────────────
+    case "spin-in":   return { ...x, rot: (1 - easeOutCubic(q)) * Math.PI, sx: 0.5 + easeOutCubic(q) * 0.5, sy: 0.5 + easeOutCubic(q) * 0.5 };
+    case "flip-x":    return { ...x, sy: easeOutCubic(q) }; // scaleY 0→1 ≈ rotateX
+    case "flip-y":    return { ...x, sx: easeOutCubic(q) }; // scaleX 0→1 ≈ rotateY
+    case "tilt-reveal": return { ...x, sy: 0.7 + easeOutCubic(q) * 0.3, dy: (1 - easeOutCubic(q)) * 0.8 * unit };
+
+    // ── special ───────────────────────────────────────
+    case "mask-wipe":    return { ...IDENT, clip: easeOutCubic(q), blur: 0 };
+    case "split-reveal": return { ...x, sx: 0.3 + easeOutCubic(q) * 0.7, blur: (1 - easeOutCubic(q)) * 6 };
+    case "glitch-in": {
+      const r = rand(seed);
+      return { ...IDENT, opacity: q > 0.12 ? 1 : 0, dx: q < 1 ? (r - 0.5) * 0.35 * unit : 0, skew: q < 1 ? (rand(seed + 7) - 0.5) * 0.35 : 0, blur: 0 };
+    }
+    case "neon-flicker": {
+      const opacities = [0.1, 1, 0.25, 1, 0.4, 1, 1];
+      return { ...IDENT, opacity: opacities[Math.min(6, Math.floor(q * 7))], blur: 0 };
+    }
+    case "wave":  return { ...IDENT, dy: Math.sin(p * Math.PI * 2) * 0.15 * unit, blur: 0 };
+    case "pulse": return { ...IDENT, sx: 1 + Math.sin(p * Math.PI) * 0.08, sy: 1 + Math.sin(p * Math.PI) * 0.08, blur: 0 };
+    case "burst-out": return { ...IDENT, opacity: 1 - easeOutCubic(p), sx: 1 + easeOutCubic(p) * 0.3, sy: 1 + easeOutCubic(p) * 0.3, dy: -easeOutCubic(p) * 0.4 * unit, blur: easeOutCubic(p) * 10 };
+
+    // ── karaoke (handled by karaoke system; plain fallback here) ──
+    case "karaoke-fill":
+    case "word-by-word":
+    case "letter-fade":  return { ...IDENT };
+
+    default: return x; // fade fallback for unknown names
+  }
+}
+
+/* ---------- layout ---------- */
+type LaidWord = { word: string; start: number; end: number; x: number; w: number; line: number };
+
+function layoutBlock(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, block: LyricBlock, maxWidth: number) {
+  const useWords = block.words.length > 0;
+  const tokens = useWords
+    ? block.words.map((w) => ({ word: w.word, start: w.start, end: w.end }))
+    : block.text.split(/\s+/).filter(Boolean).map((w, i, a) => {
+        const span = (block.endTime - block.startTime) / Math.max(1, a.length);
+        return { word: w, start: block.startTime + i * span, end: block.startTime + (i + 1) * span };
+      });
+
+  const space = ctx.measureText(" ").width;
+  const words: LaidWord[] = [];
+  const lineWidths: number[] = [];
+  let line = 0;
+  let cursor = 0;
+
+  for (const t of tokens) {
+    const w = ctx.measureText(t.word).width;
+    const next = cursor === 0 ? w : cursor + space + w;
+    if (next > maxWidth && cursor > 0) {
+      lineWidths[line] = cursor;
+      line++;
+      cursor = 0;
+    }
+    const x = cursor === 0 ? 0 : cursor + space;
+    words.push({ ...t, x, w, line });
+    cursor = x + w;
+  }
+  lineWidths[line] = cursor;
+  return { words, lineWidths, lineCount: line + 1 };
+}
+
+/* ---------- main ---------- */
+export function renderFrame(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  o: RenderOptions,
+): LayoutBox[] {
+  const { width: W, height: H, time } = o;
+  const k = H / DESIGN_HEIGHT;
+  const boxes: LayoutBox[] = [];
+
+  ctx.save();
+  ctx.clearRect(0, 0, W, H);
+
+  /* background */
+  const bg = o.background;
+  if (bg.kind === "media") {
+    const ar = bg.w / bg.h;
+    const car = W / H;
+    let dw = W, dh = H, dx = 0, dy = 0;
+    if (ar > car) { dh = H; dw = H * ar; dx = (W - dw) / 2; }
+    else { dw = W; dh = W / ar; dy = (H - dh) / 2; }
+    try { ctx.drawImage(bg.source, dx, dy, dw, dh); } catch {}
+  } else if (bg.kind === "gradient") {
+    const a = ((bg.angle ?? 135) * Math.PI) / 180;
+    const g = ctx.createLinearGradient(0, 0, Math.cos(a) * W, Math.sin(a) * H);
+    g.addColorStop(0, bg.from);
+    g.addColorStop(1, bg.to);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  } else if (bg.kind === "solid") {
+    ctx.fillStyle = bg.color;
+    ctx.fillRect(0, 0, W, H);
+  } else if (bg.kind === "particles") {
+    const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.7);
+    g.addColorStop(0, "#241A44");
+    g.addColorStop(1, "#0A0A0F");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.7);
+    g.addColorStop(0, "#1C1C2E");
+    g.addColorStop(1, "#0A0A0F");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  if (o.ai.particlesEnabled || bg.kind === "particles") {
+    ctx.save();
+    const ps = o.particleStyle ?? (o.ai as any).particleStyle ?? "dust";
+
+    if (ps === "rain") {
+      // vertical streaks
+      const count = 120;
+      for (let i = 0; i < count; i++) {
+        const sx = rand(i * 2.3) * W;
+        const speed = 180 + rand(i * 5.1) * 280;
+        const sy = (rand(i * 9.9) * H + time * speed * k) % H;
+        const len = (8 + rand(i * 3.7) * 22) * k;
+        ctx.globalAlpha = 0.12 + rand(i * 11.1) * 0.28;
+        ctx.strokeStyle = `hsl(${190 + rand(i * 7) * 40},80%,75%)`;
+        ctx.lineWidth = (0.6 + rand(i * 4.4) * 0.8) * k;
+        ctx.beginPath();
+        ctx.moveTo(sx, H - sy);
+        ctx.lineTo(sx, H - sy + len);
+        ctx.stroke();
+      }
+    } else if (ps === "stars") {
+      // coloured twinkle dots
+      const count = 80;
+      const hues = [50, 200, 270, 320, 160];
+      for (let i = 0; i < count; i++) {
+        const sx = rand(i * 3.1) * W;
+        const sy = rand(i * 7.7) * H;
+        const twinkle = 0.3 + 0.7 * Math.abs(Math.sin(time * (1.2 + rand(i) * 2.4) + i));
+        const r = (1.2 + rand(i * 13.3) * 2.8) * k;
+        ctx.globalAlpha = twinkle * (0.4 + rand(i * 17.1) * 0.5);
+        ctx.fillStyle = `hsl(${hues[i % hues.length]},90%,75%)`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (ps === "fireflies") {
+      // glowing green blobs with organic drift
+      const count = 50;
+      for (let i = 0; i < count; i++) {
+        const baseX = rand(i * 4.1) * W;
+        const baseY = rand(i * 8.3) * H;
+        const driftX = Math.sin(time * (0.4 + rand(i) * 0.6) + i * 2.1) * 60 * k;
+        const driftY = Math.cos(time * (0.3 + rand(i * 2) * 0.5) + i) * 50 * k;
+        const sx = baseX + driftX;
+        const sy = baseY + driftY;
+        const pulse = 0.4 + 0.6 * Math.abs(Math.sin(time * (1 + rand(i) * 1.5) + i * 0.7));
+        const r = (2 + rand(i * 5.5) * 3) * k;
+        ctx.save();
+        ctx.globalAlpha = pulse * 0.85;
+        ctx.shadowColor = `hsl(${100 + rand(i) * 60},100%,65%)`;
+        ctx.shadowBlur = 12 * k;
+        ctx.fillStyle = `hsl(${100 + rand(i) * 60},100%,65%)`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    } else if (ps === "constellation") {
+      // nodes connected by lines when nearby
+      const count = 40;
+      const nodes: [number, number][] = [];
+      for (let i = 0; i < count; i++) {
+        const sx = (rand(i * 3.1) * W + time * (6 + rand(i) * 10) * k) % W;
+        const sy = (rand(i * 7.7) * H + time * (4 + rand(i * 2) * 8) * k) % H;
+        nodes.push([sx, sy]);
+        ctx.globalAlpha = 0.5 + rand(i * 17.1) * 0.4;
+        ctx.fillStyle = `hsl(${280 + rand(i) * 80},80%,75%)`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, (1.5 + rand(i * 5) * 2) * k, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const threshold = 0.18 * W;
+      for (let a = 0; a < nodes.length; a++) {
+        for (let b = a + 1; b < nodes.length; b++) {
+          const dx = nodes[a][0] - nodes[b][0];
+          const dy = nodes[a][1] - nodes[b][1];
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < threshold) {
+            ctx.globalAlpha = (1 - dist / threshold) * 0.25;
+            ctx.strokeStyle = `hsl(${280 + rand(a + b) * 80},70%,70%)`;
+            ctx.lineWidth = 0.8 * k;
+            ctx.beginPath();
+            ctx.moveTo(nodes[a][0], nodes[a][1]);
+            ctx.lineTo(nodes[b][0], nodes[b][1]);
+            ctx.stroke();
+          }
+        }
+      }
+    } else {
+      // dust (default) — simple white rising dots
+      const count = 90;
+      for (let i = 0; i < count; i++) {
+        const sx = rand(i * 3.1) * W;
+        const sy = (rand(i * 7.7) * H + time * (12 + rand(i) * 26) * k) % H;
+        const r = (1 + rand(i * 13.3) * 2.4) * k;
+        ctx.globalAlpha = 0.15 + rand(i * 17.1) * 0.45;
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(sx, H - sy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  if (o.vignette !== false) {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "rgba(0,0,0,0.34)");
+    g.addColorStop(0.5, "rgba(0,0,0,0.06)");
+    g.addColorStop(1, "rgba(0,0,0,0.6)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  /* visualizer */
+  if (o.ai.visualizerEnabled) {
+    ctx.save();
+    const bars = 56;
+    const bw = W / bars;
+    for (let i = 0; i < bars; i++) {
+      const shape = 0.35 + 0.65 * Math.abs(Math.sin(i * 0.37 + o.amplitude * 6));
+      const h = (14 + o.amplitude * 150 * shape) * k;
+      ctx.fillStyle = `rgba(255,255,255,${0.35 + o.amplitude * 0.4})`;
+      ctx.fillRect(i * bw + bw * 0.15, H - h - 26 * k, bw * 0.7, h);
+    }
+    ctx.restore();
+  }
+
+  /* lyric blocks */
+  const pulse = o.ai.beatPulseEnabled ? 1 + o.bass * 0.05 : 1;
+
+  for (const block of o.blocks) {
+    if (time < block.startTime || time >= block.endTime) continue;
+
+    const fontPx = Math.max(12, block.style.fontSize * k);
+    const weight = block.style.bold ? 800 : 600;
+    const style = block.style.italic ? "italic " : "";
+    ctx.font = `${style}${weight} ${fontPx}px "${block.style.fontFamily}", Inter, sans-serif`;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+
+    const maxWidth = W * 0.86;
+    const { words, lineWidths, lineCount } = layoutBlock(ctx, block, maxWidth);
+    const lineH = fontPx * 1.18;
+    const totalH = lineCount * lineH;
+
+    const inDur = Math.max(0.05, block.animation.durationIn);
+    const outDur = Math.max(0, block.animation.durationOut);
+    const pIn = Math.min(1, (time - block.startTime) / inDur);
+    const outStart = block.endTime - outDur;
+    const pOut = outDur > 0 && time >= outStart ? Math.min(1, (time - outStart) / outDur) : 0;
+
+    const seed = Math.floor(time * 60);
+    const a = animation(block.animation.in, pIn, "in", seed, fontPx);
+    const b = pOut > 0 ? animation(block.animation.out, pOut, "out", seed + 91, fontPx) : IDENT;
+
+    const opacity = Math.min(a.opacity, b.opacity);
+    if (opacity <= 0.002) continue;
+
+    const cx = (block.style.x / 100) * W + a.dx + b.dx;
+    const cy = (block.style.y / 100) * H + a.dy + b.dy;
+
+    ctx.save();
+    const totalBlur = (a.blur + b.blur) * k;
+    if (totalBlur > 0.5) ctx.filter = `blur(${totalBlur.toFixed(1)}px)`;
+    ctx.globalAlpha = opacity;
+    ctx.translate(cx, cy);
+    ctx.rotate(a.rot + b.rot);
+    ctx.transform(1, 0, a.skew + b.skew, 1, 0, 0);
+    ctx.scale(a.sx * b.sx * pulse, a.sy * b.sy * pulse);
+
+    /* background box */
+    if (block.style.backgroundBox?.enabled) {
+      const box = block.style.backgroundBox;
+      const bwMax = Math.max(...lineWidths);
+      const pad = box.padding * k;
+      const bx = alignOffset(block.style.align, bwMax);
+      ctx.save();
+      ctx.globalAlpha = opacity * box.opacity;
+      ctx.fillStyle = box.color;
+      roundRect(ctx, bx - pad, -totalH / 2 - pad, bwMax + pad * 2, totalH + pad * 2, box.radius * k);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (block.style.outlineWidth > 0) {
+      ctx.lineJoin = "round";
+      ctx.miterLimit = 2;
+      ctx.strokeStyle = block.style.outlineColor;
+      ctx.lineWidth = block.style.outlineWidth * 2 * k;
+    }
+
+    const clipFrac = Math.min(a.clip, b.clip);
+    if (clipFrac < 1) {
+      const bwMax = Math.max(...lineWidths);
+      ctx.beginPath();
+      ctx.rect(alignOffset(block.style.align, bwMax), -totalH, bwMax * clipFrac, totalH * 2);
+      ctx.clip();
+    }
+
+    const baseFill = (): string | CanvasGradient => {
+      if (block.style.gradient?.enabled) {
+        const bwMax = Math.max(...lineWidths);
+        const gx = alignOffset(block.style.align, bwMax);
+        const g = ctx.createLinearGradient(gx, -totalH / 2, gx + bwMax, totalH / 2);
+        g.addColorStop(0, block.style.gradient.from);
+        g.addColorStop(1, block.style.gradient.to);
+        return g;
+      }
+      return block.style.color;
+    };
+
+    const karaoke = o.ai.karaokeEnabled && block.words.length > 0;
+
+    for (let li = 0; li < lineCount; li++) {
+      const lw = lineWidths[li] || 0;
+      const ox = alignOffset(block.style.align, lw);
+      const y = -totalH / 2 + lineH * li + lineH / 2;
+
+      for (const w of words) {
+        if (w.line !== li) continue;
+        const x = ox + w.x;
+
+        ctx.save();
+        if (block.style.shadow) {
+          ctx.shadowColor = block.style.shadowColor;
+          ctx.shadowBlur = block.style.shadowBlur * k;
+          ctx.shadowOffsetY = 2 * k;
+        }
+        if (block.style.glow) {
+          ctx.shadowColor = block.style.glowColor;
+          ctx.shadowBlur = 26 * k;
+          ctx.shadowOffsetY = 0;
+        }
+        if (block.style.outlineWidth > 0) ctx.strokeText(w.word, x, y);
+
+        const sung = karaoke && time >= w.end;
+        const singing = karaoke && time >= w.start && time < w.end;
+        ctx.fillStyle = karaoke && !sung && !singing ? withAlpha(block.style.color, 0.55) : baseFill();
+        ctx.fillText(w.word, x, y);
+        ctx.restore();
+
+        if (singing) {
+          const prog = (time - w.start) / Math.max(0.001, w.end - w.start);
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x - 2 * k, y - fontPx, w.w * prog + 3 * k, fontPx * 2);
+          ctx.clip();
+          ctx.shadowColor = "rgba(255,214,10,0.9)";
+          ctx.shadowBlur = 26 * k;
+          ctx.fillStyle = "#FFD60A";
+          ctx.fillText(w.word, x, y);
+          ctx.restore();
+        }
+      }
+    }
+    ctx.restore();
+
+    const bwMax = Math.max(...lineWidths);
+    boxes.push({
+      id: block.id,
+      x: cx + alignOffset(block.style.align, bwMax),
+      y: cy - totalH / 2,
+      w: bwMax,
+      h: totalH,
+    });
+
+    if (o.selectedId === block.id && o.showGuides) {
+      const box = boxes[boxes.length - 1];
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,255,255,0.85)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 6]);
+      ctx.strokeRect(box.x - 8, box.y - 8, box.w + 16, box.h + 16);
+      ctx.restore();
+    }
+  }
+
+  if (o.showGuides) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.setLineDash([6, 8]);
+    ctx.lineWidth = 1;
+    ctx.strokeRect(W * 0.03, H * 0.03, W * 0.94, H * 0.94);
+    ctx.restore();
+  }
+
+  ctx.restore();
+  return boxes;
+}
+
+function alignOffset(align: "left" | "center" | "right", w: number) {
+  return align === "left" ? 0 : align === "right" ? -w : -w / 2;
+}
+
+function withAlpha(hex: string, a: number) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+function roundRect(ctx: any, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  if (typeof ctx.roundRect === "function") { ctx.roundRect(x, y, w, h, r); return; }
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+export function hitTest(boxes: LayoutBox[], x: number, y: number): string | null {
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const b = boxes[i];
+    if (x >= b.x - 12 && x <= b.x + b.w + 12 && y >= b.y - 12 && y <= b.y + b.h + 12) return b.id;
+  }
+  return null;
 }
 
 
@@ -11050,6 +11289,337 @@ export function exportProjectJSON(state: ProjectState, fileName = "lyrical-video
   const jsonString = JSON.stringify(serializableProject, null, 2);
   const blob = new Blob([jsonString], { type: "application/json" });
   downloadBlob(blob, fileName);
+}
+
+
+================================================================================
+FILE: src\lib\exportEngine.ts
+================================================================================
+import { Muxer, ArrayBufferTarget } from "mp4-muxer";
+import { renderFrame, type BackgroundSource } from "./canvasRenderer";
+import type { AISettings, LyricBlock } from "@/types/project";
+
+export type ExportRequest = {
+  width: number;
+  height: number;
+  fps: 30 | 60;
+  duration: number;
+  blocks: LyricBlock[];
+  ai: AISettings;
+  audioBuffer: AudioBuffer | null;
+  amplitudeAt: (t: number, which?: "rms" | "bass") => number;
+  background: {
+    type: "none" | "solid" | "gradient" | "particles" | "image" | "video";
+    url?: string;
+    solidColor?: string;
+    gradientColors?: string[];
+  };
+  quality: "fast" | "balanced" | "best";
+  signal?: AbortSignal;
+  onProgress?: (p: { percent: number; stage: string; fps: number; eta: number }) => void;
+  onLog?: (m: string) => void;
+};
+
+export type ExportResult = { blob: Blob; mimeType: string; extension: string };
+
+function avcCodec(w: number, h: number, fps: number) {
+  const mb = Math.ceil(w / 16) * Math.ceil(h / 16) * fps;
+  if (w > 1920 || h > 1920) return "avc1.640034"; // High 5.2 → 4K60
+  if (mb > 522240) return "avc1.64002A";          // High 4.2 → 1080p60
+  return "avc1.640028";                            // High 4.0
+}
+
+function bitrateFor(w: number, h: number, fps: number, quality: string) {
+  const px = w * h;
+  const base = px >= 3840 * 2160 ? 62_000_000 : px >= 1920 * 1080 ? 20_000_000 : 9_000_000;
+  const q = quality === "best" ? 1.5 : quality === "fast" ? 0.65 : 1;
+  return Math.round(base * q * (fps / 30) * 0.62);
+}
+
+export async function probeSupport(width: number, height: number, fps: number) {
+  const out = { webcodecs: false, video: false, audio: false, hardware: false };
+  if (typeof VideoEncoder === "undefined") return out;
+  out.webcodecs = true;
+  try {
+    const cfg = {
+      codec: avcCodec(width, height, fps),
+      width,
+      height,
+      framerate: fps,
+      bitrate: bitrateFor(width, height, fps, "balanced"),
+      hardwareAcceleration: "prefer-hardware" as const,
+      avc: { format: "avc" as const },
+    };
+    const s = await VideoEncoder.isConfigSupported(cfg);
+    out.video = !!s.supported;
+    out.hardware = s.config?.hardwareAcceleration === "prefer-hardware";
+  } catch {}
+  try {
+    if (typeof AudioEncoder !== "undefined") {
+      const s = await AudioEncoder.isConfigSupported({
+        codec: "mp4a.40.2",
+        sampleRate: 48000,
+        numberOfChannels: 2,
+        bitrate: 192_000,
+      });
+      out.audio = !!s.supported;
+    }
+  } catch {}
+  return out;
+}
+
+class BackgroundProvider {
+  private video: HTMLVideoElement | null = null;
+  private image: HTMLImageElement | null = null;
+  private videoDuration = 0;
+  private lastSeek = -1;
+
+  constructor(private cfg: ExportRequest["background"], private fps: number) {}
+
+  async init() {
+    if (this.cfg.type === "video" && this.cfg.url) {
+      const v = document.createElement("video");
+      v.src = this.cfg.url;
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = "auto";
+      await new Promise<void>((res) => {
+        const done = () => res();
+        v.onloadeddata = done;
+        v.onerror = done;
+        setTimeout(done, 8000);
+      });
+      this.videoDuration = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+      this.video = v;
+    } else if (this.cfg.type === "image" && this.cfg.url) {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = this.cfg.url;
+      await new Promise<void>((res) => {
+        img.onload = () => res();
+        img.onerror = () => res();
+        setTimeout(res, 8000);
+      });
+      this.image = img;
+    }
+  }
+
+  async at(t: number): Promise<BackgroundSource> {
+    if (this.video && this.videoDuration > 0) {
+      const target = t % this.videoDuration;
+      if (Math.abs(target - this.lastSeek) >= 1 / this.fps) {
+        this.lastSeek = target;
+        await seekVideo(this.video, target);
+      }
+      return { kind: "media", source: this.video, w: this.video.videoWidth || 16, h: this.video.videoHeight || 9 };
+    }
+    if (this.image && this.image.naturalWidth > 0) {
+      return { kind: "media", source: this.image, w: this.image.naturalWidth, h: this.image.naturalHeight };
+    }
+    switch (this.cfg.type) {
+      case "solid": return { kind: "solid", color: this.cfg.solidColor || "#0A0A0F" };
+      case "gradient":
+        return { kind: "gradient", from: this.cfg.gradientColors?.[0] || "#FF00FF", to: this.cfg.gradientColors?.[1] || "#00FFAB", angle: 135 };
+      case "particles": return { kind: "particles" };
+      default: return { kind: "none" };
+    }
+  }
+
+  dispose() {
+    if (this.video) { this.video.removeAttribute("src"); this.video.load(); }
+    this.video = null;
+    this.image = null;
+  }
+}
+
+function seekVideo(v: HTMLVideoElement, t: number) {
+  return new Promise<void>((res) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; cleanup(); res(); } };
+    const cleanup = () => {
+      v.removeEventListener("seeked", finish);
+      clearTimeout(timer);
+    };
+    v.addEventListener("seeked", finish, { once: true });
+    const timer = setTimeout(finish, 400);
+    try { v.currentTime = t; } catch { finish(); }
+    if (typeof (v as any).requestVideoFrameCallback === "function") {
+      (v as any).requestVideoFrameCallback(() => finish());
+    }
+  });
+}
+
+export async function exportVideo(req: ExportRequest): Promise<ExportResult> {
+  const { width, height, fps, duration } = req;
+  const log = req.onLog ?? (() => {});
+
+  const support = await probeSupport(width, height, fps);
+  if (!support.webcodecs || !support.video) {
+    throw new Error(
+      "WebCodecs H.264 encoding is unavailable in this browser. Use Chrome/Edge 116+ for 720p/1080p/4K 60fps export.",
+    );
+  }
+  log(`Encoder ready · ${width}×${height}@${fps} · ${support.hardware ? "GPU" : "software"}`);
+
+  const totalFrames = Math.max(1, Math.round(duration * fps));
+  const useAudio = !!req.audioBuffer && support.audio;
+
+  const muxer = new Muxer({
+    target: new ArrayBufferTarget(),
+    fastStart: "in-memory",
+    video: { codec: "avc", width, height, frameRate: fps },
+    ...(useAudio
+      ? { audio: { codec: "aac", sampleRate: req.audioBuffer!.sampleRate, numberOfChannels: Math.min(2, req.audioBuffer!.numberOfChannels) } }
+      : {}),
+  });
+
+  let encoderError: Error | null = null;
+
+  const videoEncoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: (e) => { encoderError = e as Error; },
+  });
+  videoEncoder.configure({
+    codec: avcCodec(width, height, fps),
+    width,
+    height,
+    framerate: fps,
+    bitrate: bitrateFor(width, height, fps, req.quality),
+    hardwareAcceleration: "prefer-hardware",
+    latencyMode: "quality",
+    avc: { format: "avc" },
+  });
+
+  const canvas =
+    typeof OffscreenCanvas !== "undefined"
+      ? new OffscreenCanvas(width, height)
+      : Object.assign(document.createElement("canvas"), { width, height });
+  const ctx = (canvas as any).getContext("2d", { alpha: false, desynchronized: true });
+  if (!ctx) throw new Error("Could not create a 2D rendering context.");
+
+  const bgProvider = new BackgroundProvider(req.background, fps);
+  await bgProvider.init();
+
+  const started = performance.now();
+  const gopSize = fps * 2;
+
+  try {
+    if (useAudio) {
+      log("Encoding AAC audio…");
+      await encodeAudio(req.audioBuffer!, duration, muxer, req.signal);
+      req.onProgress?.({ percent: 4, stage: "audio encoded", fps: 0, eta: 0 });
+    } else if (req.audioBuffer) {
+      log("AAC encoder unavailable — exporting silent video.");
+    }
+
+    for (let i = 0; i < totalFrames; i++) {
+      if (req.signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+      if (encoderError) throw encoderError;
+
+      const t = i / fps;
+      const background = await bgProvider.at(t);
+
+      renderFrame(ctx, {
+        time: t,
+        width,
+        height,
+        blocks: req.blocks,
+        background,
+        ai: req.ai,
+        amplitude: req.amplitudeAt(t, "rms"),
+        bass: req.amplitudeAt(t, "bass"),
+        showGuides: false,
+      });
+
+      const frame = new VideoFrame(canvas as any, {
+        timestamp: Math.round((i * 1_000_000) / fps),
+        duration: Math.round(1_000_000 / fps),
+      });
+      videoEncoder.encode(frame, { keyFrame: i % gopSize === 0 });
+      frame.close();
+
+      if (videoEncoder.encodeQueueSize > 8) await drain(videoEncoder);
+      if (i % 12 === 0) {
+        const elapsed = (performance.now() - started) / 1000;
+        const rate = (i + 1) / Math.max(0.001, elapsed);
+        req.onProgress?.({
+          percent: 4 + ((i + 1) / totalFrames) * 94,
+          stage: `rendering frame ${i + 1}/${totalFrames}`,
+          fps: rate,
+          eta: (totalFrames - i - 1) / Math.max(1, rate),
+        });
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+
+    log("Flushing encoder…");
+    await videoEncoder.flush();
+    muxer.finalize();
+
+    const buffer = (muxer.target as ArrayBufferTarget).buffer;
+    const blob = new Blob([buffer], { type: "video/mp4" });
+    const secs = (performance.now() - started) / 1000;
+    log(`Done in ${secs.toFixed(1)}s · ${(blob.size / 1048576).toFixed(1)} MB · ${(totalFrames / secs).toFixed(0)} fps render rate`);
+    req.onProgress?.({ percent: 100, stage: "complete", fps: totalFrames / secs, eta: 0 });
+
+    return { blob, mimeType: "video/mp4", extension: "mp4" };
+  } finally {
+    try { if (videoEncoder.state !== "closed") videoEncoder.close(); } catch {}
+    bgProvider.dispose();
+  }
+}
+
+function drain(enc: VideoEncoder) {
+  return new Promise<void>((res) => {
+    const anyEnc = enc as any;
+    if ("ondequeue" in anyEnc) {
+      anyEnc.ondequeue = () => { if (enc.encodeQueueSize <= 4) { anyEnc.ondequeue = null; res(); } };
+      return;
+    }
+    const poll = () => (enc.encodeQueueSize <= 4 ? res() : setTimeout(poll, 4));
+    poll();
+  });
+}
+
+async function encodeAudio(buffer: AudioBuffer, duration: number, muxer: Muxer<ArrayBufferTarget>, signal?: AbortSignal) {
+  const channels = Math.min(2, buffer.numberOfChannels);
+  const sampleRate = buffer.sampleRate;
+  const totalFrames = Math.min(buffer.length, Math.ceil(duration * sampleRate));
+  const CHUNK = 4096;
+
+  let err: Error | null = null;
+  const encoder = new AudioEncoder({
+    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+    error: (e) => { err = e as Error; },
+  });
+  encoder.configure({ codec: "mp4a.40.2", sampleRate, numberOfChannels: channels, bitrate: 192_000 });
+
+  const planes: Float32Array[] = [];
+  for (let c = 0; c < channels; c++) planes.push(buffer.getChannelData(c));
+
+  for (let off = 0; off < totalFrames; off += CHUNK) {
+    if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+    if (err) throw err;
+    const n = Math.min(CHUNK, totalFrames - off);
+    const interleaved = new Float32Array(n * channels);
+    for (let c = 0; c < channels; c++) {
+      const plane = planes[c];
+      for (let i = 0; i < n; i++) interleaved[i * channels + c] = plane[off + i] || 0;
+    }
+    const data = new AudioData({
+      format: "f32",
+      sampleRate,
+      numberOfFrames: n,
+      numberOfChannels: channels,
+      timestamp: Math.round((off / sampleRate) * 1_000_000),
+      data: interleaved,
+    });
+    encoder.encode(data);
+    data.close();
+    if (encoder.encodeQueueSize > 12) await new Promise((r) => setTimeout(r, 0));
+  }
+  await encoder.flush();
+  encoder.close();
 }
 
 
@@ -12216,6 +12786,131 @@ export function formatTimecode(seconds: number): string {
 
 
 ================================================================================
+FILE: src\lib\timeUtils.ts
+================================================================================
+import type { LyricBlock, WordTimestamp } from "@/types/project";
+
+export const MIN_BLOCK_DURATION = 0.12;
+export const MIN_WORD_DURATION = 0.03;
+
+export const r3 = (n: number) => Math.round(n * 1000) / 1000;
+export const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+
+/** Move every word by a constant delta (used when dragging a whole block). */
+export function shiftWords(words: WordTimestamp[], delta: number): WordTimestamp[] {
+  return words.map((w) => ({
+    word: w.word,
+    start: r3(Math.max(0, w.start + delta)),
+    end: r3(Math.max(MIN_WORD_DURATION, w.end + delta)),
+  }));
+}
+
+/**
+ * Linearly time-warp words from [oldStart,oldEnd] onto [newStart,newEnd].
+ * This keeps captions synced when trimming a block from left or right edge.
+ */
+export function scaleWords(
+  words: WordTimestamp[],
+  oldStart: number,
+  oldEnd: number,
+  newStart: number,
+  newEnd: number,
+): WordTimestamp[] {
+  const oldSpan = Math.max(1e-6, oldEnd - oldStart);
+  const newSpan = Math.max(MIN_BLOCK_DURATION, newEnd - newStart);
+  const k = newSpan / oldSpan;
+  return words.map((w) => {
+    const s = newStart + (w.start - oldStart) * k;
+    const e = newStart + (w.end - oldStart) * k;
+    return { word: w.word, start: r3(Math.max(0, s)), end: r3(Math.max(s + MIN_WORD_DURATION, e)) };
+  });
+}
+
+export type RetimeMode = "move" | "scale" | "trim";
+
+/**
+ * Produce a fully consistent block patch for a new [start,end].
+ *  move  → shift words (duration unchanged)
+ *  scale → time-warp words (duration changed, karaoke stays proportional)
+ *  trim  → keep absolute word timings, only clip the visible window
+ */
+export function retimeBlock(
+  block: LyricBlock,
+  newStart: number,
+  newEnd: number,
+  mode: RetimeMode,
+): Partial<LyricBlock> {
+  const start = r3(Math.max(0, newStart));
+  const end = r3(Math.max(start + MIN_BLOCK_DURATION, newEnd));
+
+  if (mode === "move") {
+    return { startTime: start, endTime: end, words: shiftWords(block.words, start - block.startTime) };
+  }
+  if (mode === "trim") {
+    return { startTime: start, endTime: end, words: block.words };
+  }
+  return {
+    startTime: start,
+    endTime: end,
+    words: scaleWords(block.words, block.startTime, block.endTime, start, end),
+  };
+}
+
+/** Drag a single word boundary; neighbours absorb the change so nothing overlaps. */
+export function retimeWordBoundary(
+  words: WordTimestamp[],
+  index: number,
+  edge: "start" | "end",
+  time: number,
+): WordTimestamp[] {
+  const out = words.map((w) => ({ ...w }));
+  const cur = out[index];
+  if (!cur) return out;
+
+  if (edge === "start") {
+    const lo = index > 0 ? out[index - 1].start + MIN_WORD_DURATION : 0;
+    const hi = cur.end - MIN_WORD_DURATION;
+    cur.start = r3(clamp(time, lo, hi));
+    if (index > 0) out[index - 1].end = cur.start;
+  } else {
+    const lo = cur.start + MIN_WORD_DURATION;
+    const hi = index < out.length - 1 ? out[index + 1].end - MIN_WORD_DURATION : Number.MAX_SAFE_INTEGER;
+    cur.end = r3(clamp(time, lo, hi));
+    if (index < out.length - 1) out[index + 1].start = cur.end;
+  }
+  return out;
+}
+
+export function snap(time: number, grid: number, enabled: boolean): number {
+  if (!enabled || grid <= 0) return time;
+  return Math.round(time / grid) * grid;
+}
+
+/** Snap to the nearest interesting time (word edge / block edge) within tolerance. */
+export function magneticSnap(time: number, candidates: number[], tolerance: number): number {
+  let best = time;
+  let bestD = tolerance;
+  for (const c of candidates) {
+    const d = Math.abs(c - time);
+    if (d < bestD) {
+      bestD = d;
+      best = c;
+    }
+  }
+  return best;
+}
+
+export function formatTimecode(seconds: number, showMs = true): string {
+  const s = Math.max(0, seconds);
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  const cs = Math.floor((s % 1) * 100);
+  const base = `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return showMs ? `${base}.${String(cs).padStart(2, "0")}` : base;
+}
+
+
+================================================================================
 FILE: src\remotion\LyricComposition.tsx
 ================================================================================
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, Easing, Sequence, Audio, Video, Img } from "remotion";
@@ -12732,8 +13427,11 @@ type Actions = {
   setLyricBlocks: (blocks: LyricBlock[]) => void;
   addLyricBlock: (block: LyricBlock) => void;
   updateLyricBlock: (id: string, patch: Partial<LyricBlock>) => void;
+  updateLyricBlocks: (patches: { id: string; patch: Partial<LyricBlock> }[]) => void;
   updateBlockStyle: (id: string, stylePatch: Partial<LyricBlockStyle>) => void;
   updateBlockAnimation: (id: string, animPatch: Partial<LyricAnimation>) => void;
+  applyStyleToAllBlocks: (stylePatch: Partial<LyricBlockStyle>) => void;
+  applyAnimationToAllBlocks: (animPatch: Partial<LyricAnimation>) => void;
   deleteLyricBlock: (id: string) => void;
   duplicateBlock: (id: string) => void;
   splitBlock: (id: string, wordIndex: number) => void;
@@ -12807,6 +13505,11 @@ export const useLyricStore = create<ProjectState & Actions>()(
         if (prevUrl && prevUrl.startsWith("blob:") && prevUrl !== url) {
           try { URL.revokeObjectURL(prevUrl); } catch {}
         }
+        if (file) {
+          import("@/lib/audioEngine").then(({ audioEngine }) => {
+            audioEngine.load(file).catch(() => {});
+          });
+        }
         set({
           audioFile: file,
           audioUrl: url,
@@ -12849,6 +13552,16 @@ export const useLyricStore = create<ProjectState & Actions>()(
         });
       },
 
+      updateLyricBlocks: (patches) => {
+        const patchMap = new Map(patches.map((p) => [p.id, p.patch]));
+        set({
+          lyricBlocks: get().lyricBlocks.map((b) => {
+            const patch = patchMap.get(b.id);
+            return patch ? normalizeLyricBlock({ ...b, ...patch }) : b;
+          }),
+        });
+      },
+
       updateBlockStyle: (id, stylePatch) => {
         set({
           lyricBlocks: get().lyricBlocks.map((b) => {
@@ -12867,6 +13580,31 @@ export const useLyricStore = create<ProjectState & Actions>()(
       updateBlockAnimation: (id, animPatch) => {
         set({
           lyricBlocks: get().lyricBlocks.map((b) => (b.id === id ? { ...b, animation: { ...b.animation, ...animPatch } } : b)),
+        });
+      },
+
+      applyStyleToAllBlocks: (stylePatch) => {
+        get().pushHistory();
+        set({
+          lyricBlocks: get().lyricBlocks.map((b) => {
+            const updatedStyle: LyricBlockStyle = {
+              ...b.style,
+              ...stylePatch,
+              gradient: stylePatch.gradient ? { ...b.style.gradient!, ...stylePatch.gradient } : b.style.gradient,
+              backgroundBox: stylePatch.backgroundBox ? { ...b.style.backgroundBox!, ...stylePatch.backgroundBox } : b.style.backgroundBox,
+            };
+            return { ...b, style: updatedStyle };
+          }),
+        });
+      },
+
+      applyAnimationToAllBlocks: (animPatch) => {
+        get().pushHistory();
+        set({
+          lyricBlocks: get().lyricBlocks.map((b) => ({
+            ...b,
+            animation: { ...b.animation, ...animPatch },
+          })),
         });
       },
 
@@ -13094,29 +13832,11 @@ export type LyricBlockStyle = {
   backgroundBox?: { enabled: boolean; color: string; opacity: number; padding: number; radius: number };
 };
 
-export type LyricAnimationIn =
-  | "fade"
-  | "pop"
-  | "slideUp"
-  | "slideDown"
-  | "slideLeft"
-  | "slideRight"
-  | "zoom"
-  | "typewriter"
-  | "bounce"
-  | "glitch"
-  | "kinetic"
-  | "none";
+/** Any animation preset ID from ANIMATION_PRESETS, or a legacy camelCase name, or "none". */
+export type LyricAnimationIn = string;
 
-export type LyricAnimationOut =
-  | "fade"
-  | "pop"
-  | "slideUp"
-  | "slideDown"
-  | "slideLeft"
-  | "slideRight"
-  | "zoom"
-  | "none";
+/** Any animation preset ID from ANIMATION_PRESETS, or a legacy camelCase name, or "none". */
+export type LyricAnimationOut = string;
 
 export type LyricAnimation = {
   in: LyricAnimationIn;
@@ -13136,6 +13856,7 @@ export type LyricBlock = {
   style: LyricBlockStyle;
   animation: LyricAnimation;
   emotion?: string;
+  confidence?: number;
 };
 
 export type BackgroundAssetType = "video" | "image" | "gradient" | "particles" | "solid";
