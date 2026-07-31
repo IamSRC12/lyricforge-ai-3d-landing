@@ -8,21 +8,9 @@ import { transcribeWithGroq } from "@/lib/groq";
 import { analyzeWithNvidiaNim } from "@/lib/omniRouter";
 import { alignLyricsToWhisper } from "@/lib/alignLyrics";
 import { SettingsModal } from "./SettingsModal";
-import { Play, Pause, RotateCcw, ArrowRight, Wand2, Check } from "lucide-react";
+import { Wand2 } from "lucide-react";
 import { LyricsAnalyzer, generateWordTimestamps } from "@/lib/lyricsAnalyzer";
-import { detectLanguage } from "@/lib/sync-engine";
 import { defaultStyle, defaultAnimation } from "@/store/useLyricStore";
-
-
-type AnalysisResult = {
-  blocks: LyricBlock[];
-  language: string;
-  durationSeconds: number;
-  wordCount: number;
-  avgConfidence: number;
-  tagsRemoved: string[];
-  processingMs: number;
-};
 
 export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
   const { setAudio, settings, setLyricBlocks } = useLyricStore();
@@ -32,20 +20,13 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
   const [lyricsText, setLyricsText] = useState("");
   const [cleanInfo, setCleanInfo] = useState<{ removed: string[]; warnings: string[] } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [stage, setStage] = useState<"idle" | "transcribing" | "analyzing" | "preview" | "error">("idle");
+  const [stage, setStage] = useState<"idle" | "transcribing" | "analyzing" | "error">("idle");
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Optional NIM Toggle
   const [enableNim, setEnableNim] = useState(false);
   const [engineMode, setEngineMode] = useState<"local" | "groq">("local");
-
-
-  // Preview State
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const isMounted = useRef(true);
   useEffect(() => {
@@ -61,29 +42,7 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
     }
   }, []);
 
-  // Audio Playback Listener for Preview
-  useEffect(() => {
-    if (!audioRef.current) return;
-    const audio = audioRef.current;
-    const onTimeUpdate = () => setCurrentTime(audio.currentTime);
-    const onEnded = () => setIsPlaying(false);
-    audio.addEventListener("timeupdate", onTimeUpdate);
-    audio.addEventListener("ended", onEnded);
-    return () => {
-      audio.removeEventListener("timeupdate", onTimeUpdate);
-      audio.removeEventListener("ended", onEnded);
-    };
-  }, [audioUrl]);
 
-  const togglePlay = () => {
-    if (!audioRef.current) return;
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    } else {
-      audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
-    }
-  };
 
   const onDropAudio = useCallback(
     async (files: File[]) => {
@@ -229,21 +188,9 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
           waveform
         );
 
-        // Detect language
-        const detected = detectLanguage(cleanedLines.join("\n"));
-        const totalWords = finalBlocks.reduce((acc, b) => acc + b.words.length, 0);
-
-        setAnalysisResult({
-          blocks: finalBlocks,
-          language: detected.language.toUpperCase(),
-          durationSeconds: duration,
-          wordCount: totalWords,
-          avgConfidence: 0.0, // Match the 0% confidence from the image when not using Groq API
-          tagsRemoved: removedTags,
-          processingMs: Date.now() - startTime,
-        });
-
-        setStage("preview");
+        setLyricBlocks(finalBlocks);
+        log(`Pushed ${finalBlocks.length} synchronized lyric blocks to Studio Timeline`);
+        onAnalyzed();
 
       } else {
         if (!settings.groqApiKey?.trim()) {
@@ -372,19 +319,9 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
 
         if (!isMounted.current) return;
 
-        const totalWords = finalBlocks.reduce((acc, b) => acc + b.words.length, 0);
-
-        setAnalysisResult({
-          blocks: finalBlocks,
-          language: whisperResult.language.toUpperCase(),
-          durationSeconds: finalDuration,
-          wordCount: totalWords,
-          avgConfidence: alignment.confidence,
-          tagsRemoved: removedTags,
-          processingMs: Date.now() - startTime,
-        });
-
-        setStage("preview");
+        setLyricBlocks(finalBlocks);
+        log(`Pushed ${finalBlocks.length} synchronized lyric blocks to Studio Timeline`);
+        onAnalyzed();
       }
     } catch (e: any) {
       if (isMounted.current) {
