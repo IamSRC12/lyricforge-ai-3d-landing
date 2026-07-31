@@ -1,3 +1,5 @@
+import type { WordTimestamp } from "@/types/project";
+
 export class LyricsAnalyzer {
   private audioBuffer: AudioBuffer;
   private sampleRate: number;
@@ -131,4 +133,29 @@ export class LyricsAnalyzer {
 
     return breakPoints;
   }
+}
+
+export function generateWordTimestamps(text: string, startTime: number, endTime: number): WordTimestamp[] {
+  const rawWords = text.trim().split(/\s+/).filter(Boolean);
+  if (rawWords.length === 0) return [];
+
+  // Compute character lengths for weighted distribution
+  const lengths = rawWords.map((w) => w.length);
+  const totalLength = lengths.reduce((a, b) => a + b, 0);
+  const totalDuration = endTime - startTime;
+
+  let currentStart = startTime;
+  return rawWords.map((word, idx) => {
+    const wordDur = totalLength > 0 ? (lengths[idx] / totalLength) * totalDuration : totalDuration / rawWords.length;
+    const start = currentStart;
+    const end = currentStart + wordDur;
+    currentStart = end;
+    return {
+      word,
+      start: Number(start.toFixed(3)),
+      end: Number(end.toFixed(3)),
+      confidence: 1.0,
+      anchored: false,
+    };
+  });
 }
