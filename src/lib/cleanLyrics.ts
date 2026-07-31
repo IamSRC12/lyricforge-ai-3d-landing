@@ -138,7 +138,7 @@ export function cleanLyricsText(raw: string): { cleaned: string; removedTags: st
     // Strip inline enclosed structural tags e.g. "[Chorus] We are the champions" -> "We are the champions"
     line = line.replace(ENCLOSED_TAG_REGEX, (match, p1) => {
       const inner = String(p1 || "").trim();
-      if (isStructuralHeader(inner)) {
+      if (isStructuralHeader(inner) || /^\d+$/.test(inner)) {
         removedTags.push(match);
         return "";
       }
