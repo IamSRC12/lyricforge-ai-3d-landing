@@ -45,14 +45,17 @@ function rand(seed: number) {
   return x - Math.floor(x);
 }
 
-type Xform = { opacity: number; dx: number; dy: number; sx: number; sy: number; rot: number; skew: number; clip: number };
-const IDENT: Xform = { opacity: 1, dx: 0, dy: 0, sx: 1, sy: 1, rot: 0, skew: 0, clip: 1 };
+type Xform = { opacity: number; dx: number; dy: number; sx: number; sy: number; rot: number; skew: number; clip: number; blur: number };
+const IDENT: Xform = { opacity: 1, dx: 0, dy: 0, sx: 1, sy: 1, rot: 0, skew: 0, clip: 1, blur: 0 };
 
 function animation(name: string, p: number, dir: "in" | "out", seed: number, unit: number): Xform {
   const q = dir === "out" ? 1 - p : p;
   const x = { ...IDENT, opacity: q };
   switch (name) {
+    // ── none ──────────────────────────────────────────
     case "none": return { ...IDENT };
+
+    // ── legacy camelCase (kept for backwards compat) ──
     case "fade": return x;
     case "pop": return { ...x, opacity: Math.min(1, q * 4), sx: 0.4 + easeOutBack(q) * 0.6, sy: 0.4 + easeOutBack(q) * 0.6 };
     case "zoom": return { ...x, sx: 1.8 - 0.8 * easeOutCubic(q), sy: 1.8 - 0.8 * easeOutCubic(q) };
@@ -64,10 +67,66 @@ function animation(name: string, p: number, dir: "in" | "out", seed: number, uni
     case "kinetic": return { ...x, rot: (1 - easeOutCubic(q)) * -0.14, sx: 0.8 + easeOutCubic(q) * 0.2, sy: 0.8 + easeOutCubic(q) * 0.2 };
     case "glitch": {
       const r = rand(seed);
-      return { ...IDENT, opacity: q > 0.12 ? 1 : 0, dx: q < 1 ? (r - 0.5) * 0.35 * unit : 0, skew: q < 1 ? (rand(seed + 7) - 0.5) * 0.35 : 0 };
+      return { ...IDENT, opacity: q > 0.12 ? 1 : 0, dx: q < 1 ? (r - 0.5) * 0.35 * unit : 0, skew: q < 1 ? (rand(seed + 7) - 0.5) * 0.35 : 0, blur: 0 };
     }
-    case "typewriter": return { ...IDENT, clip: easeOutCubic(q) };
-    default: return x;
+    case "typewriter": return { ...IDENT, clip: easeOutCubic(q), blur: 0 };
+
+    // ── basic ─────────────────────────────────────────
+    case "fade-in":   return { ...IDENT, opacity: q };
+    case "fade-out":  return { ...IDENT, opacity: 1 - p };
+    case "slide-up":  return { ...x, dy: (1 - easeOutCubic(q)) * 0.9 * unit };
+    case "slide-down": return { ...x, dy: -(1 - easeOutCubic(q)) * 0.9 * unit };
+    case "slide-left": return { ...x, dx: (1 - easeOutCubic(q)) * 1.4 * unit };
+    case "slide-right": return { ...x, dx: -(1 - easeOutCubic(q)) * 1.4 * unit };
+    case "blur-in":   return { ...x, blur: (1 - easeOutCubic(q)) * 18 };
+    case "soft-rise": return { ...x, dy: (1 - easeOutCubic(q)) * 0.4 * unit, sx: 0.97 + easeOutCubic(q) * 0.03, sy: 0.97 + easeOutCubic(q) * 0.03 };
+
+    // ── bounce ────────────────────────────────────────
+    case "pop-in":    return { ...x, opacity: Math.min(1, q * 4), sx: 0.4 + easeOutBack(q) * 0.6, sy: 0.4 + easeOutBack(q) * 0.6 };
+    case "bounce-in": return { ...IDENT, opacity: Math.min(1, q * 5), dy: (1 - easeOutBounce(q)) * -1.1 * unit, blur: 0 };
+    case "elastic-in": {
+      const sq = q < 0.45 ? easeOutBack(q / 0.45) : 1;
+      return { ...x, sx: 0.3 + sq * 0.85, sy: 1.55 - sq * 0.55, blur: 0 };
+    }
+    case "swing":     return { ...x, rot: (1 - easeOutCubic(q)) * -0.24 };
+    case "shake-in": {
+      const shakes = [0, -8, 8, -5, 5, -3, 3, 0];
+      return { ...x, opacity: Math.min(1, q * 5), dx: (shakes[Math.min(7, Math.floor(q * 8))] || 0) * 0.012 * unit };
+    }
+
+    // ── zoom ──────────────────────────────────────────
+    case "scale-in":  return { ...x, sx: 0.85 + easeOutCubic(q) * 0.15, sy: 0.85 + easeOutCubic(q) * 0.15 };
+    case "zoom-out":  return { ...IDENT, opacity: 1 - easeOutCubic(p), sx: 1 + easeOutCubic(p) * 0.4, sy: 1 + easeOutCubic(p) * 0.4 };
+    case "punch-zoom": return { ...x, opacity: Math.min(1, q * 3), sx: 1.6 - easeOutBack(q) * 0.6, sy: 1.6 - easeOutBack(q) * 0.6 };
+    case "depth-push": return { ...x, sx: 0.4 + easeOutCubic(q) * 0.6, sy: 0.4 + easeOutCubic(q) * 0.6, dy: (1 - easeOutCubic(q)) * 0.5 * unit };
+
+    // ── rotate ────────────────────────────────────────
+    case "spin-in":   return { ...x, rot: (1 - easeOutCubic(q)) * Math.PI, sx: 0.5 + easeOutCubic(q) * 0.5, sy: 0.5 + easeOutCubic(q) * 0.5 };
+    case "flip-x":    return { ...x, sy: easeOutCubic(q) }; // scaleY 0→1 ≈ rotateX
+    case "flip-y":    return { ...x, sx: easeOutCubic(q) }; // scaleX 0→1 ≈ rotateY
+    case "tilt-reveal": return { ...x, sy: 0.7 + easeOutCubic(q) * 0.3, dy: (1 - easeOutCubic(q)) * 0.8 * unit };
+
+    // ── special ───────────────────────────────────────
+    case "mask-wipe":    return { ...IDENT, clip: easeOutCubic(q), blur: 0 };
+    case "split-reveal": return { ...x, sx: 0.3 + easeOutCubic(q) * 0.7, blur: (1 - easeOutCubic(q)) * 6 };
+    case "glitch-in": {
+      const r = rand(seed);
+      return { ...IDENT, opacity: q > 0.12 ? 1 : 0, dx: q < 1 ? (r - 0.5) * 0.35 * unit : 0, skew: q < 1 ? (rand(seed + 7) - 0.5) * 0.35 : 0, blur: 0 };
+    }
+    case "neon-flicker": {
+      const opacities = [0.1, 1, 0.25, 1, 0.4, 1, 1];
+      return { ...IDENT, opacity: opacities[Math.min(6, Math.floor(q * 7))], blur: 0 };
+    }
+    case "wave":  return { ...IDENT, dy: Math.sin(p * Math.PI * 2) * 0.15 * unit, blur: 0 };
+    case "pulse": return { ...IDENT, sx: 1 + Math.sin(p * Math.PI) * 0.08, sy: 1 + Math.sin(p * Math.PI) * 0.08, blur: 0 };
+    case "burst-out": return { ...IDENT, opacity: 1 - easeOutCubic(p), sx: 1 + easeOutCubic(p) * 0.3, sy: 1 + easeOutCubic(p) * 0.3, dy: -easeOutCubic(p) * 0.4 * unit, blur: easeOutCubic(p) * 10 };
+
+    // ── karaoke (handled by karaoke system; plain fallback here) ──
+    case "karaoke-fill":
+    case "word-by-word":
+    case "letter-fade":  return { ...IDENT };
+
+    default: return x; // fade fallback for unknown names
   }
 }
 
@@ -224,6 +283,8 @@ export function renderFrame(
     const cy = (block.style.y / 100) * H + a.dy + b.dy;
 
     ctx.save();
+    const totalBlur = (a.blur + b.blur) * k;
+    if (totalBlur > 0.5) ctx.filter = `blur(${totalBlur.toFixed(1)}px)`;
     ctx.globalAlpha = opacity;
     ctx.translate(cx, cy);
     ctx.rotate(a.rot + b.rot);
