@@ -26,7 +26,6 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
 
   // Optional NIM Toggle
   const [enableNim, setEnableNim] = useState(false);
-  const [engineMode, setEngineMode] = useState<"local" | "groq">("local");
 
   const isMounted = useRef(true);
   useEffect(() => {
@@ -139,190 +138,135 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
       log("Generating audio waveform...");
       const waveform = await generateWaveform(audioFile);
 
-      if (engineMode === "local") {
-        log("Decoding audio for local silence analysis...");
-        const arrayBuffer = await audioFile.arrayBuffer();
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-
-        log("Detecting audio pauses & boundaries...");
-        const analyzer = new LyricsAnalyzer(audioBuffer);
-        
-        const { cleaned, removedTags } = cleanLyricsText(lyricsText);
-        const cleanedLines = splitIntoBlocks(cleaned);
-
-        if (cleanedLines.length === 0) {
-          throw new Error("No usable lyric lines remained after cleaning.");
-        }
-
-        const localSegments = await analyzer.generateTimestamps(
-          cleanedLines,
-          (progress, msg) => {
-            log(`${msg} (${progress}%)`);
-          }
+      if (!settings.groqApiKey?.trim()) {
+        throw new Error(
+          "A Groq API key is required for Groq Whisper alignment. Please add your Groq API key in Settings (⚙)."
         );
-
-        if (!isMounted.current) return;
-        setStage("analyzing");
-        log("Assigning styling & word timings...");
-
-        const finalBlocks: LyricBlock[] = localSegments.map((seg, idx) => {
-          const words = generateWordTimestamps(seg.lyrics, seg.startTime, seg.endTime);
-          return {
-            id: `aligned_${idx}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-            text: seg.lyrics,
-            startTime: seg.startTime,
-            endTime: seg.endTime,
-            words,
-            style: { ...defaultStyle },
-            animation: { ...defaultAnimation },
-          };
-        });
-
-        const finalUrl = audioUrl || URL.createObjectURL(audioFile);
-
-        setAudio(
-          audioFile,
-          finalUrl,
-          duration,
-          waveform
-        );
-
-        setLyricBlocks(finalBlocks);
-        log(`Pushed ${finalBlocks.length} synchronized lyric blocks to Studio Timeline`);
-        onAnalyzed();
-
-      } else {
-        if (!settings.groqApiKey?.trim()) {
-          throw new Error(
-            "A Groq API key is required for Groq Whisper alignment. Please add your Groq API key in Settings (⚙)."
-          );
-        }
-
-        log("Running Groq Whisper v3 Turbo transcription...");
-        let whisperResult;
-
-        try {
-          whisperResult = await transcribeWithGroq(
-            audioFile,
-            settings.groqApiKey,
-            log
-          );
-        } catch (transcriptionError: unknown) {
-          const message =
-            transcriptionError instanceof Error
-              ? transcriptionError.message
-              : "Unknown transcription error";
-
-          throw new Error(
-            `Groq Transcription failed: ${message}. Check your API key and connection.`
-          );
-        }
-
-        if (!isMounted.current) return;
-
-        const finalDuration = Math.max(
-          duration || 0,
-          whisperResult.duration || 0
-        );
-
-        const finalUrl = audioUrl || URL.createObjectURL(audioFile);
-
-        setAudio(
-          audioFile,
-          finalUrl,
-          finalDuration,
-          waveform
-        );
-
-        if (!isMounted.current) return;
-        setStage("analyzing");
-
-        const { cleaned, removedTags } = cleanLyricsText(lyricsText);
-        const cleanedBlocks = splitIntoBlocks(cleaned);
-
-        if (cleanedBlocks.length === 0) {
-          throw new Error("No usable lyric lines remained after cleaning.");
-        }
-
-        log(`Preserved ${cleanedBlocks.length} lyric lines`);
-        log("Executing Groq deterministic forced alignment...");
-
-        const alignment = alignLyricsToWhisper(
-          cleanedBlocks,
-          whisperResult,
-          finalDuration
-        );
-
-        log(
-          `Groq Alignment confidence: ${(alignment.confidence * 100).toFixed(1)}% ` +
-          `(${alignment.matchedWords}/${alignment.totalWords} words)`
-        );
-
-        let finalBlocks = alignment.blocks;
-
-        if (enableNim) {
-          if (!settings.nvidiaNimApiKey?.trim()) {
-            log("NVIDIA NIM toggle active but no API key set; skipping NIM & using Groq aligned defaults.");
-          } else {
-            try {
-              log("Sending timeline request to NVIDIA NIM AI Engine...");
-              const aiResult = await analyzeWithNvidiaNim(
-                cleanedBlocks,
-                whisperResult,
-                settings.nvidiaNimEndpoint || "https://integrate.api.nvidia.com",
-                settings.nvidiaNimApiKey,
-                settings.nvidiaNimModel || "minimaxai/minimax-m3",
-                log
-              );
-
-              const styleMap = new Map<string, any>();
-              for (const sb of aiResult.blocks) {
-                const key = String(sb.text || "").trim().toLowerCase();
-                if (key) styleMap.set(key, sb);
-              }
-
-              finalBlocks = alignment.blocks.map((alignedBlock) => {
-                const key = alignedBlock.text.trim().toLowerCase();
-                const styledBlock = styleMap.get(key);
-
-                if (!styledBlock) return alignedBlock;
-
-                return {
-                  ...alignedBlock,
-                  style: {
-                    ...alignedBlock.style,
-                    ...styledBlock.style,
-                    gradient: { ...alignedBlock.style.gradient!, ...styledBlock.style.gradient },
-                    backgroundBox: { ...alignedBlock.style.backgroundBox!, ...styledBlock.style.backgroundBox },
-                  },
-                  animation: { ...alignedBlock.animation, ...styledBlock.animation },
-                  emotion: styledBlock.emotion ?? alignedBlock.emotion,
-                  text: alignedBlock.text,
-                  startTime: alignedBlock.startTime,
-                  endTime: alignedBlock.endTime,
-                  words: alignedBlock.words,
-                };
-              });
-
-              if (aiResult.customCSS) {
-                injectScopedCSS("lyric-ai-custom", aiResult.customCSS);
-              }
-            } catch (styleError: unknown) {
-              const message = styleError instanceof Error ? styleError.message : "NIM styling failed";
-              log(`${message}; falling back to Groq aligned defaults`);
-            }
-          }
-        } else {
-          log("NVIDIA NIM feature skipped (Groq handles full lyrics alignment)");
-        }
-
-        if (!isMounted.current) return;
-
-        setLyricBlocks(finalBlocks);
-        log(`Pushed ${finalBlocks.length} synchronized lyric blocks to Studio Timeline`);
-        onAnalyzed();
       }
+
+      log("Running Groq Whisper v3 Turbo transcription...");
+      let whisperResult;
+
+      try {
+        whisperResult = await transcribeWithGroq(
+          audioFile,
+          settings.groqApiKey,
+          log
+        );
+      } catch (transcriptionError: unknown) {
+        const message =
+          transcriptionError instanceof Error
+            ? transcriptionError.message
+            : "Unknown transcription error";
+
+        throw new Error(
+          `Groq Transcription failed: ${message}. Check your API key and connection.`
+        );
+      }
+
+      if (!isMounted.current) return;
+
+      const finalDuration = Math.max(
+        duration || 0,
+        whisperResult.duration || 0
+      );
+
+      const finalUrl = audioUrl || URL.createObjectURL(audioFile);
+
+      setAudio(
+        audioFile,
+        finalUrl,
+        finalDuration,
+        waveform
+      );
+
+      if (!isMounted.current) return;
+      setStage("analyzing");
+
+      const { cleaned, removedTags } = cleanLyricsText(lyricsText);
+      const cleanedBlocks = splitIntoBlocks(cleaned);
+
+      if (cleanedBlocks.length === 0) {
+        throw new Error("No usable lyric lines remained after cleaning.");
+      }
+
+      log(`Preserved ${cleanedBlocks.length} lyric lines`);
+      log("Executing Groq deterministic forced alignment...");
+
+      const alignment = alignLyricsToWhisper(
+        cleanedBlocks,
+        whisperResult,
+        finalDuration
+      );
+
+      log(
+        `Groq Alignment confidence: ${(alignment.confidence * 100).toFixed(1)}% ` +
+        `(${alignment.matchedWords}/${alignment.totalWords} words)`
+      );
+
+      let finalBlocks = alignment.blocks;
+
+      if (enableNim) {
+        if (!settings.nvidiaNimApiKey?.trim()) {
+          log("NVIDIA NIM toggle active but no API key set; skipping NIM & using Groq aligned defaults.");
+        } else {
+          try {
+            log("Sending timeline request to NVIDIA NIM AI Engine...");
+            const aiResult = await analyzeWithNvidiaNim(
+              cleanedBlocks,
+              whisperResult,
+              settings.nvidiaNimEndpoint || "https://integrate.api.nvidia.com",
+              settings.nvidiaNimApiKey,
+              settings.nvidiaNimModel || "minimaxai/minimax-m3",
+              log
+            );
+
+            const styleMap = new Map<string, any>();
+            for (const sb of aiResult.blocks) {
+              const key = String(sb.text || "").trim().toLowerCase();
+              if (key) styleMap.set(key, sb);
+            }
+
+            finalBlocks = alignment.blocks.map((alignedBlock) => {
+              const key = alignedBlock.text.trim().toLowerCase();
+              const styledBlock = styleMap.get(key);
+
+              if (!styledBlock) return alignedBlock;
+
+              return {
+                ...alignedBlock,
+                style: {
+                  ...alignedBlock.style,
+                  ...styledBlock.style,
+                  gradient: { ...alignedBlock.style.gradient!, ...styledBlock.style.gradient },
+                  backgroundBox: { ...alignedBlock.style.backgroundBox!, ...styledBlock.style.backgroundBox },
+                },
+                animation: { ...alignedBlock.animation, ...styledBlock.animation },
+                emotion: styledBlock.emotion ?? alignedBlock.emotion,
+                text: alignedBlock.text,
+                startTime: alignedBlock.startTime,
+                endTime: alignedBlock.endTime,
+                words: alignedBlock.words,
+              };
+            });
+
+            if (aiResult.customCSS) {
+              injectScopedCSS("lyric-ai-custom", aiResult.customCSS);
+            }
+          } catch (styleError: unknown) {
+            const message = styleError instanceof Error ? styleError.message : "NIM styling failed";
+            log(`${message}; falling back to Groq aligned defaults`);
+          }
+        }
+      } else {
+        log("NVIDIA NIM feature skipped (Groq handles full lyrics alignment)");
+      }
+
+      if (!isMounted.current) return;
+
+      setLyricBlocks(finalBlocks);
+      log(`Pushed ${finalBlocks.length} synchronized lyric blocks to Studio Timeline`);
+      onAnalyzed();
     } catch (e: any) {
       if (isMounted.current) {
         setStage("error");
@@ -422,44 +366,12 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
             <div className="rounded-[20px] border border-white/10 bg-[#14141C] p-6">
               <h3 className="text-sm font-bold uppercase tracking-wider text-white/80">Analysis Pipeline</h3>
 
-              {/* Engine Selector */}
-              <div className="mt-4 p-1 rounded-xl bg-black/40 border border-white/5 flex gap-1">
-                <button
-                  type="button"
-                  onClick={() => setEngineMode("local")}
-                  className={`flex-1 rounded-lg py-2 text-xs font-bold transition flex items-center justify-center gap-1.5 ${
-                    engineMode === "local"
-                      ? "bg-purple-600 text-white shadow-lg"
-                      : "text-white/40 hover:text-white hover:bg-white/[0.02]"
-                  }`}
-                >
-                  <span>⚡</span> Local Splitter
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEngineMode("groq")}
-                  className={`flex-1 rounded-lg py-2 text-xs font-bold transition flex items-center justify-center gap-1.5 ${
-                    engineMode === "groq"
-                      ? "bg-purple-600 text-white shadow-lg"
-                      : "text-white/40 hover:text-white hover:bg-white/[0.02]"
-                  }`}
-                >
-                  <span>🤖</span> Groq Whisper AI
-                </button>
-              </div>
-
               {/* Pipeline Steps */}
               <div className="mt-4 space-y-3">
-                {(engineMode === "local"
-                  ? [
-                      { id: "transcribing", title: "Audio Pauses & Decoding", desc: "Analyzing silence & energy boundaries locally" },
-                      { id: "analyzing", title: "Lyrics Timing Mapping", desc: "Aligning lyrics to audio silences in browser" },
-                    ]
-                  : [
-                      { id: "transcribing", title: "Groq Whisper v3 Turbo (Primary)", desc: "Exact word timestamps & lyrics alignment" },
-                      { id: "analyzing", title: "NVIDIA NIM Engine (Optional)", desc: "AI visual themes & emotion styling" },
-                    ]
-                ).map((s, i) => {
+                {[
+                  { id: "transcribing", title: "Groq Whisper v3 Turbo (Primary)", desc: "Exact word timestamps & lyrics alignment" },
+                  { id: "analyzing", title: "NVIDIA NIM Engine (Optional)", desc: "AI visual themes & emotion styling" },
+                ].map((s, i) => {
                   const active = stage === s.id;
                   const done = stage === "analyzing" && i === 0;
                   return (
@@ -490,27 +402,25 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
               </div>
 
               {/* Optional NVIDIA NIM Switch */}
-              {engineMode === "groq" && (
-                <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.02] p-3 flex items-center justify-between">
-                  <div>
-                    <div className="text-xs font-bold text-white/90">NVIDIA NIM Styling (Optional)</div>
-                    <div className="text-[11px] text-white/40">Main lyrics timing is always handled by Groq</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setEnableNim((v) => !v)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      enableNim ? "bg-purple-600" : "bg-white/10"
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        enableNim ? "translate-x-6" : "translate-x-1"
-                      }`}
-                    />
-                  </button>
+              <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.02] p-3 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-white/90">NVIDIA NIM Styling (Optional)</div>
+                  <div className="text-[11px] text-white/40">Main lyrics timing is always handled by Groq</div>
                 </div>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setEnableNim((v) => !v)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    enableNim ? "bg-purple-600" : "bg-white/10"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      enableNim ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
 
               {/* Analyze Action Button */}
               <div className="mt-6">
@@ -521,7 +431,7 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
                   loading={stage === "transcribing" || stage === "analyzing"}
                   disabled={!audioFile || !lyricsText.trim()}
                 >
-                  <Wand2 className="mr-2 h-4 w-4" /> {engineMode === "local" ? "Analyze & Detect Timing" : "Analyze → Divide Lyrics"}
+                  <Wand2 className="mr-2 h-4 w-4" /> Analyze → Divide Lyrics
                 </Button>
                 {error && <div className="mt-3 rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-300">{error}</div>}
               </div>
@@ -530,9 +440,7 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
               <div className="mt-6 rounded-xl bg-black/60 p-3 font-mono text-[11px] leading-relaxed text-white/50 max-h-[160px] overflow-auto border border-white/5">
                 <div className="text-white/30 mb-1.5 flex items-center justify-between">
                   <span>LIVE LOG</span>
-                  <span className="text-[10px]">
-                    {engineMode === "local" ? "Client-Side Engine" : "Groq Engine"}
-                  </span>
+                  <span className="text-[10px]">Groq Engine</span>
                 </div>
                 {logs.length === 0 ? <div>No logs yet</div> : logs.map((l, i) => <div key={i}>› {l}</div>)}
               </div>
@@ -541,14 +449,12 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
               <div className="mt-5 grid grid-cols-2 gap-2">
                 <div className="rounded-xl border border-purple-500/30 bg-purple-500/10 p-3">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-purple-300">MAIN ENGINE</div>
-                  <div className="text-xs font-bold text-white">
-                    {engineMode === "local" ? "Local Audio Splitter" : "Groq Whisper Turbo"}
-                  </div>
+                  <div className="text-xs font-bold text-white">Groq Whisper Turbo</div>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-white/40 font-mono">NIM FEATURE</div>
                   <div className="text-xs font-bold text-white/80">
-                    {engineMode === "local" ? "N/A (Offline)" : (enableNim ? "NVIDIA NIM Active" : "Optional (Off)")}
+                    {enableNim ? "NVIDIA NIM Active" : "Optional (Off)"}
                   </div>
                 </div>
               </div>
