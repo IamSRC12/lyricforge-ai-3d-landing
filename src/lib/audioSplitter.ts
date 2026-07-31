@@ -103,14 +103,25 @@ export function computeSegmentBounds(
     let end = block.endTime;
 
     if (block.words && block.words.length > 0) {
-      // Use the tightest word boundary times (with 20ms pre-roll and 40ms post-roll padding by default)
-      start = Math.max(0, block.words[0].start - 0.02);
-      end = Math.max(start + MIN_SEGMENT_SECONDS, block.words[block.words.length - 1].end + 0.04);
+      // Use 150ms pre-roll to capture breath/onset, and 50ms post-roll
+      start = Math.max(0, block.words[0].start - 0.15);
+      end = Math.max(start + MIN_SEGMENT_SECONDS, block.words[block.words.length - 1].end + 0.05);
     }
 
     start = clamp(start, 0, total);
     end = clamp(end, start + MIN_SEGMENT_SECONDS, total || end);
-    if (next && end > next.startTime) end = Math.max(start + MIN_SEGMENT_SECONDS, next.startTime);
+
+    // Prevent next-line vocal bleed by capping end before the next block's vocal starts
+    if (next) {
+      let nextStart = next.startTime;
+      if (next.words && next.words.length > 0) {
+        nextStart = Math.max(0, next.words[0].start - 0.15);
+      }
+      if (end > nextStart) {
+        end = Math.max(start + MIN_SEGMENT_SECONDS, nextStart);
+      }
+    }
+
     return {
       blockId: block.id,
       text: block.text,
