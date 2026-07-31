@@ -33,6 +33,7 @@ export type SyncSegment = {
   inAnimation: string;
   outAnimation: string;
   words: SyncWord[];
+  isInstrumental?: boolean;
 };
 
 export type EmotionLabel =
@@ -320,6 +321,24 @@ export function forgeTimeline(options: SyncOptions): SyncResult {
   let wordCount = 0;
   let confidenceSum = 0;
   let lowConfidenceCount = 0;
+  let segIndex = 0;
+
+  if (leadIn >= 0.8) {
+    segments.push({
+      id: `seg_inst_intro`,
+      index: segIndex++,
+      text: "🎵 [Instrumental Intro]",
+      start: 0,
+      end: round(leadIn),
+      confidence: 0.99,
+      emotion: "calm",
+      energy: 3,
+      inAnimation: "fade-in",
+      outAnimation: "fade-out",
+      words: [],
+      isInstrumental: true,
+    });
+  }
 
   lines.forEach((line, index) => {
     const share = (lineWeights[index] / totalWeight) * usable;
@@ -329,10 +348,6 @@ export function forgeTimeline(options: SyncOptions): SyncResult {
     const syllables = words.map((w) => Math.max(1, estimateSyllables(w)));
     const syllableTotal = syllables.reduce((a, b) => a + b, 0) || 1;
 
-    // A human sings ~3 syllables/second; anything longer than that becomes an
-    // instrumental gap instead of stretching the phrase into slow motion.
-    // Sustain factor: a phrase may linger up to 2× its natural length before the
-    // remaining time is handed back to the instrumental gap.
     const naturalSpan = (syllableTotal * 0.34 + 0.55) * 2;
     const span = clamp(Math.min(share * 0.88, naturalSpan), 0.55, Math.max(0.6, share));
     const gap = Math.max(0.08, share - span);
@@ -375,7 +390,7 @@ export function forgeTimeline(options: SyncOptions): SyncResult {
 
     segments.push({
       id: `seg_${index.toString().padStart(3, "0")}`,
-      index,
+      index: segIndex++,
       text: line,
       start: round(start),
       end: round(Math.min(duration, end)),
@@ -388,7 +403,41 @@ export function forgeTimeline(options: SyncOptions): SyncResult {
     });
 
     cursor = end + gap;
+
+    if (gap >= 1.2 && index < lines.length - 1) {
+      segments.push({
+        id: `seg_inst_${index}`,
+        index: segIndex++,
+        text: "🎵 [Instrumental Music Break]",
+        start: round(end),
+        end: round(end + gap),
+        confidence: 0.99,
+        emotion: "calm",
+        energy: 4,
+        inAnimation: "fade-in",
+        outAnimation: "fade-out",
+        words: [],
+        isInstrumental: true,
+      });
+    }
   });
+
+  if (cursor < duration - 1.0) {
+    segments.push({
+      id: `seg_inst_outro`,
+      index: segIndex++,
+      text: "🎵 [Instrumental Outro]",
+      start: round(cursor),
+      end: round(duration),
+      confidence: 0.99,
+      emotion: "calm",
+      energy: 3,
+      inAnimation: "fade-in",
+      outAnimation: "fade-out",
+      words: [],
+      isInstrumental: true,
+    });
+  }
 
   log.push(`Distributed ${wordCount} words across ${segments.length} segments on a ${bpm} BPM grid`);
   if (lowConfidenceCount > 0) {
