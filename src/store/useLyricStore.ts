@@ -136,6 +136,7 @@ type Actions = {
   setLyricBlocks: (blocks: LyricBlock[]) => void;
   addLyricBlock: (block: LyricBlock) => void;
   updateLyricBlock: (id: string, patch: Partial<LyricBlock>) => void;
+  updateLyricBlocks: (patches: { id: string; patch: Partial<LyricBlock> }[]) => void;
   updateBlockStyle: (id: string, stylePatch: Partial<LyricBlockStyle>) => void;
   updateBlockAnimation: (id: string, animPatch: Partial<LyricAnimation>) => void;
   applyStyleToAllBlocks: (stylePatch: Partial<LyricBlockStyle>) => void;
@@ -257,6 +258,16 @@ export const useLyricStore = create<ProjectState & Actions>()(
       updateLyricBlock: (id, patch) => {
         set({
           lyricBlocks: get().lyricBlocks.map((b) => (b.id === id ? normalizeLyricBlock({ ...b, ...patch }) : b)),
+        });
+      },
+
+      updateLyricBlocks: (patches) => {
+        const patchMap = new Map(patches.map((p) => [p.id, p.patch]));
+        set({
+          lyricBlocks: get().lyricBlocks.map((b) => {
+            const patch = patchMap.get(b.id);
+            return patch ? normalizeLyricBlock({ ...b, ...patch }) : b;
+          }),
         });
       },
 

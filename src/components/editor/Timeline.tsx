@@ -24,6 +24,7 @@ export function Timeline() {
     setSelectedBlock,
     selectedBlockId,
     updateLyricBlock,
+    updateLyricBlocks,
     audioWaveform,
     pushHistory,
   } = useLyricStore();
@@ -78,6 +79,7 @@ export function Timeline() {
 
       let newStart = orig.startTime;
       let newEnd = orig.endTime;
+      const patches: { id: string; patch: Partial<LyricBlock> }[] = [];
 
       if (dragging.mode === "move") {
         const dur = orig.endTime - orig.startTime;
@@ -87,15 +89,38 @@ export function Timeline() {
         }
         newEnd = newStart + dur;
         const patch = retimeBlock(orig, newStart, newEnd, "move");
-        updateLyricBlock(dragging.id, patch);
+        patches.push({ id: dragging.id, patch });
       } else if (dragging.mode === "left") {
         newStart = Math.max(0, Math.min(orig.startTime + ds, orig.endTime - 0.12));
         const patch = retimeBlock(orig, newStart, orig.endTime, "scale");
-        updateLyricBlock(dragging.id, patch);
+        patches.push({ id: dragging.id, patch });
       } else if (dragging.mode === "right") {
         newEnd = Math.max(orig.startTime + 0.12, Math.min(orig.endTime + ds, maxAudioEnd));
         const patch = retimeBlock(orig, orig.startTime, newEnd, "scale");
-        updateLyricBlock(dragging.id, patch);
+        patches.push({ id: dragging.id, patch });
+      }
+
+      const targetPatch = patches[0]?.patch;
+      if (targetPatch) {
+        const updatedTargetStart = targetPatch.startTime ?? newStart;
+        const updatedTargetEnd = targetPatch.endTime ?? newEnd;
+
+        const currentBlocks = [...useLyricStore.getState().lyricBlocks].sort((a, b) => a.startTime - b.startTime);
+        const idx = currentBlocks.findIndex((b) => b.id === dragging.id);
+
+        if (idx > 0) {
+          const pred = currentBlocks[idx - 1];
+          const predPatch = retimeBlock(pred, pred.startTime, updatedTargetStart, "scale");
+          patches.push({ id: pred.id, patch: predPatch });
+        }
+
+        if (idx < currentBlocks.length - 1) {
+          const succ = currentBlocks[idx + 1];
+          const succPatch = retimeBlock(succ, updatedTargetEnd, succ.endTime, "scale");
+          patches.push({ id: succ.id, patch: succPatch });
+        }
+
+        updateLyricBlocks(patches);
       }
     };
 
@@ -112,7 +137,7 @@ export function Timeline() {
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [dragging, pixelsPerSecond, safeDuration, updateLyricBlock]);
+  }, [dragging, pixelsPerSecond, safeDuration, updateLyricBlocks]);
 
   const onTimelineClick = (e: React.MouseEvent) => {
     if (dragging?.hasDragged) return;
