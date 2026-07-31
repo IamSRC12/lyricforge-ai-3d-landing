@@ -125,6 +125,8 @@ export function PropertiesPanel() {
     setBackground,
     backgroundAsset,
     pushHistory,
+    applyStyleToAllBlocks,
+    applyAnimationToAllBlocks,
   } = useLyricStore();
 
   const selected = lyricBlocks.find((b) => b.id === selectedBlockId);
@@ -365,7 +367,16 @@ export function PropertiesPanel() {
           </div>
 
           <div className="rounded-[16px] border border-white/10 bg-[#14141C] p-4">
-            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-widest text-white/60">Style Controls</h3>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-[11px] font-bold uppercase tracking-widest text-white/60">Style Controls</h3>
+              <button
+                type="button"
+                onClick={() => applyStyleToAllBlocks(selected.style)}
+                className="rounded-full bg-purple-500/20 px-2.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-500/30 hover:bg-purple-500/35 transition"
+              >
+                Apply to All
+              </button>
+            </div>
 
             <div className="space-y-4">
               <div>
@@ -551,7 +562,16 @@ export function PropertiesPanel() {
           </div>
 
           <div className="rounded-[16px] border border-white/10 bg-[#14141C] p-4">
-            <h3 className="mb-3 text-[11px] font-bold uppercase tracking-widest text-white/60">Animation</h3>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-[11px] font-bold uppercase tracking-widest text-white/60">Animation</h3>
+              <button
+                type="button"
+                onClick={() => applyAnimationToAllBlocks(selected.animation)}
+                className="rounded-full bg-purple-500/20 px-2.5 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-500/30 hover:bg-purple-500/35 transition"
+              >
+                Apply to All
+              </button>
+            </div>
 
             {/* In / Out selector buttons */}
             <div className="grid grid-cols-2 gap-2">
