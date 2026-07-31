@@ -121,16 +121,20 @@ if (Test-Path -LiteralPath $logFile) {
     $old = Get-Content -LiteralPath $logFile -Raw -Encoding UTF8
     # Strip old header, keep only entries, then prepend new entry
     $oldLines = $old -split "`r?`n"
-    # Find first '===============' line that starts an entry after header
+    # Find the separator line directly above the first TIMESTAMP line
     $entryStart = -1
     for ($i = 0; $i -lt $oldLines.Count; $i++) {
-        if ($oldLines[$i] -match '^={10,}') {
-            # skip the very first separator (header top) and header block
-            if ($i -ge 4) { $entryStart = $i; break }
+        if ($oldLines[$i] -match '^TIMESTAMP:') {
+            $entryStart = $i - 1   # the separator right above the first entry
+            break
         }
     }
-    $oldEntries = if ($entryStart -ge 0) { ($oldLines[$entryStart..($oldLines.Count - 1)] -join "`r`n") } else { $old }
-    $combined = $logHeader + "`r`n" + $entry + "`r`n" + $oldEntries
+    if ($entryStart -ge 0) {
+        $oldEntries = ($oldLines[$entryStart..($oldLines.Count - 1)] -join "`r`n")
+    } else {
+        $oldEntries = $old
+    }
+    $combined = $logHeader + "`r`n" + $entry + "`r`n" + $oldEntries.TrimStart("`r", "`n")
     Set-Content -LiteralPath $logFile -Value $combined -Encoding UTF8
 } else {
     $combined = $logHeader + "`r`n" + $entry
