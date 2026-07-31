@@ -197,6 +197,7 @@ const initialAISettings: AISettings = {
   liveCssEnabled: false,
   visualizerEnabled: false,
   particlesEnabled: false,
+  particleStyle: "dust",
   beatPulseEnabled: true,
 };
 
@@ -208,10 +209,15 @@ const initialState: ProjectState = {
   audioWaveform: [],
   audioSegments: [],
   splitMode: "tight",
+  rawLyrics: "",
   backgroundAsset: null,
   lyricBlocks: [],
   settings: initialSettings,
   aiSettings: initialAISettings,
+  karaokeStyle: DEFAULT_KARAOKE_STYLE,
+  karaokeScene: DEFAULT_KARAOKE_SCENE,
+  globalOffsetMs: 0,
+  latencyMs: 0,
   selectedBlockId: null,
   currentTime: 0,
   isPlaying: false,

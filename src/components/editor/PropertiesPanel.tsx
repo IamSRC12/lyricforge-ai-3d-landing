@@ -737,10 +737,10 @@ export function PropertiesPanel() {
         <h3 className="mb-3 text-[11px] font-bold uppercase tracking-widest text-white/60">AI Enhancements</h3>
         <div className="space-y-3">
           {[
-            { key: "karaokeEnabled" as keyof AISettings, label: "Karaoke Word Highlight", desc: "Per-word sync using Whisper" },
-            { key: "visualizerEnabled" as keyof AISettings, label: "Audio Visualizer", desc: "Reactive waveform bars" },
-            { key: "beatPulseEnabled" as keyof AISettings, label: "Beat Pulse", desc: "Scale punch on word start" },
-            { key: "autoAnimateEnabled" as keyof AISettings, label: "Auto Animations", desc: "AI picks in/out per segment" },
+            { key: "karaokeEnabled" as const, label: "Karaoke Word Highlight", desc: "Per-word sync using Whisper" },
+            { key: "visualizerEnabled" as const, label: "Audio Visualizer", desc: "Reactive waveform bars" },
+            { key: "beatPulseEnabled" as const, label: "Beat Pulse", desc: "Scale punch on word start" },
+            { key: "autoAnimateEnabled" as const, label: "Auto Animations", desc: "AI picks in/out per segment" },
           ].map((t) => (
             <label key={t.key} className="flex items-start gap-3 rounded-xl bg-white/[0.03] p-3 hover:bg-white/[0.06] cursor-pointer">
               <input
