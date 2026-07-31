@@ -128,10 +128,16 @@ export function UploadPage({ onAnalyzed }: { onAnalyzed: () => void }) {
     setStage("splitting");
     setError(null);
     try {
-      // Await the decode explicitly — setAudio() kicks it off via a dynamic
-      // import, which is a race condition we must not rely on here.
-      const { duration: decodedDuration } = await audioEngine.load(audioFile);
-      const buffer = audioEngine.audioBuffer;
+      let buffer = audioEngine.audioBuffer;
+      let decodedDuration = audioEngine.duration;
+
+      if (!buffer) {
+        log("Decoding audio file...");
+        const result = await audioEngine.load(audioFile);
+        buffer = audioEngine.audioBuffer;
+        decodedDuration = result.duration;
+      }
+
       if (!buffer) throw new Error("Audio decode failed — try converting to WAV or MP3.");
 
       const blocks = useLyricStore.getState().lyricBlocks;
