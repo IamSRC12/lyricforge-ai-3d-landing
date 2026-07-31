@@ -48,43 +48,91 @@
   50% { opacity: 0.9; transform: scale(1.06); }
 }
 
-@layer base {
-  html {
-    scroll-behavior: smooth;
-    color-scheme: dark;
-  }
+:root {
+  color-scheme: dark;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f1f5f9;
+  background: #0a0a0f;
 
-  body {
-    background-color: #07070c;
-    color: var(--color-forge-text);
-    font-family: var(--font-sans);
-    -webkit-font-smoothing: antialiased;
-    overflow-x: hidden;
-  }
+  --background: #0a0a0f;
+  --surface: #12121a;
+  --elevated: #1a1a2e;
+  --border: #2a2a3e;
+  --primary: #7c3aed;
+  --secondary: #3b82f6;
+  --accent: #06b6d4;
+  --success: #10b981;
+  --muted: #94a3b8;
+  --muted-dark: #64748b;
+}
 
-  ::selection {
-    background: rgba(124, 58, 237, 0.4);
-    color: #fff;
-  }
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
 
-  ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
 
-  ::-webkit-scrollbar-track {
-    background: #0a0a0f;
-  }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+}
 
-  ::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, #3b1e6e, #1e3a8a);
-    border-radius: 999px;
-    border: 2px solid #0a0a0f;
-  }
+::-webkit-scrollbar-track {
+  background: transparent;
+}
 
-  ::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(180deg, #7c3aed, #3b82f6);
-  }
+html {
+  scroll-behavior: smooth;
+  background: var(--background);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background:
+    radial-gradient(
+      circle at 50% -20%,
+      rgba(124, 58, 237, 0.13),
+      transparent 35%
+    ),
+    var(--background);
+}
+
+button,
+a,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  color: inherit;
+  background: none;
+  border: none;
+}
+
+::selection {
+  color: white;
+  background: rgba(124, 58, 237, 0.72);
 }
 
 @utility glass {

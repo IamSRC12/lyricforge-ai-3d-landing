@@ -11,16 +11,24 @@
   "dependencies": {
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",
+    "@react-three/postprocessing": "^3.0.4",
+    "@remotion/player": "^4.0.503",
     "@types/three": "^0.185.1",
+    "clsx": "^2.1.1",
     "dotenv": "17.3.1",
     "drizzle-orm": "0.45.2",
     "framer-motion": "^12.43.0",
     "lucide-react": "^1.28.0",
     "next": "16.2.6",
     "pg": "8.20.0",
+    "postprocessing": "^6.39.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "three": "^0.185.1"
+    "react-dropzone": "^19.1.1",
+    "remotion": "^4.0.503",
+    "tailwind-merge": "^3.6.0",
+    "three": "^0.185.1",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.17",
