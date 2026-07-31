@@ -3,6 +3,8 @@ import { useLyricStore } from "@/store/useLyricStore";
 import type { LyricBlock } from "@/types/project";
 import { cn } from "@/lib/cn";
 import { generateDeterministicWaveform } from "@/lib/audioUtils";
+import { audioEngine } from "@/lib/audioEngine";
+import { retimeBlock, formatTimecode } from "@/lib/timeUtils";
 import { Play, Pause, SkipBack, SkipForward, ZoomIn, ZoomOut, Layers } from "lucide-react";
 
 type DraggingState = {
@@ -24,27 +26,26 @@ export function Timeline() {
     updateLyricBlock,
     audioWaveform,
     pushHistory,
-    isPlaying,
-    setIsPlaying,
   } = useLyricStore();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [dragging, setDragging] = useState<DraggingState | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   const pixelsPerSecond = 120 * zoom;
-  const safeDuration = Math.max(audioDuration || 0, 10);
+  const safeDuration = Math.max(audioDuration || audioEngine.duration || 0, 10);
   const totalWidth = Math.max(safeDuration * pixelsPerSecond, 800);
 
   const fallbackWaveform = useMemo(() => generateDeterministicWaveform(160), []);
   const waveformData = audioWaveform.length > 0 ? audioWaveform : fallbackWaveform;
 
-  const formatTimecode = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 100);
-    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
-  };
+  useEffect(() => {
+    return audioEngine.subscribe((t, playing) => {
+      setIsPlaying(playing);
+      setCurrentTime(t);
+    });
+  }, [setCurrentTime]);
 
   const onPointerDownBlock = (e: React.PointerEvent, block: LyricBlock, mode: "move" | "left" | "right") => {
     e.stopPropagation();
@@ -70,50 +71,29 @@ export function Timeline() {
 
       const ds = dx / pixelsPerSecond;
       const orig = dragging.orig;
-      const maxAudioEnd = audioDuration > 0 ? audioDuration : 9999;
-      const minDuration = 0.2;
+      const maxAudioEnd = safeDuration;
 
-      let newBlock: LyricBlock = JSON.parse(JSON.stringify(orig));
+      let newStart = orig.startTime;
+      let newEnd = orig.endTime;
 
       if (dragging.mode === "move") {
         const dur = orig.endTime - orig.startTime;
-        let newStart = Math.max(0, orig.startTime + ds);
+        newStart = Math.max(0, orig.startTime + ds);
         if (newStart + dur > maxAudioEnd) {
           newStart = Math.max(0, maxAudioEnd - dur);
         }
-        const actualShift = newStart - orig.startTime;
-        newBlock.startTime = Number(newStart.toFixed(3));
-        newBlock.endTime = Number((newStart + dur).toFixed(3));
-        newBlock.words = orig.words.map((w) => ({
-          ...w,
-          start: Number(Math.max(0, w.start + actualShift).toFixed(3)),
-          end: Number(Math.max(0, w.end + actualShift).toFixed(3)),
-        }));
+        newEnd = newStart + dur;
+        const patch = retimeBlock(orig, newStart, newEnd, "move");
+        updateLyricBlock(dragging.id, patch);
       } else if (dragging.mode === "left") {
-        let newStart = Math.max(0, orig.startTime + ds);
-        newStart = Math.min(newStart, orig.endTime - minDuration);
-        newBlock.startTime = Number(newStart.toFixed(3));
-        newBlock.words = orig.words
-          .filter((w) => w.end > newStart)
-          .map((w) => ({
-            ...w,
-            start: Number(Math.max(newStart, w.start).toFixed(3)),
-            end: Number(Math.max(newStart + 0.05, w.end).toFixed(3)),
-          }));
+        newStart = Math.max(0, Math.min(orig.startTime + ds, orig.endTime - 0.12));
+        const patch = retimeBlock(orig, newStart, orig.endTime, "scale");
+        updateLyricBlock(dragging.id, patch);
       } else if (dragging.mode === "right") {
-        let newEnd = orig.endTime + ds;
-        newEnd = Math.max(orig.startTime + minDuration, Math.min(newEnd, maxAudioEnd));
-        newBlock.endTime = Number(newEnd.toFixed(3));
-        newBlock.words = orig.words
-          .filter((w) => w.start < newEnd)
-          .map((w) => ({
-            ...w,
-            start: Number(Math.min(newEnd - 0.05, w.start).toFixed(3)),
-            end: Number(Math.min(newEnd, w.end).toFixed(3)),
-          }));
+        newEnd = Math.max(orig.startTime + 0.12, Math.min(orig.endTime + ds, maxAudioEnd));
+        const patch = retimeBlock(orig, orig.startTime, newEnd, "scale");
+        updateLyricBlock(dragging.id, patch);
       }
-
-      updateLyricBlock(dragging.id, newBlock);
     };
 
     const onPointerUp = () => {
@@ -129,15 +109,15 @@ export function Timeline() {
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [dragging, pixelsPerSecond, audioDuration, updateLyricBlock]);
+  }, [dragging, pixelsPerSecond, safeDuration, updateLyricBlock]);
 
   const onTimelineClick = (e: React.MouseEvent) => {
     if (dragging?.hasDragged) return;
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left + containerRef.current.scrollLeft;
-    const t = Math.max(0, Math.min(audioDuration > 0 ? audioDuration : 9999, x / pixelsPerSecond));
-    setCurrentTime(t);
+    const t = Math.max(0, Math.min(safeDuration, x / pixelsPerSecond));
+    audioEngine.seek(t);
   };
 
   const sortedBlocks = useMemo(() => {
@@ -156,7 +136,7 @@ export function Timeline() {
             <span>4-TRACK STUDIO TIMELINE</span>
           </div>
           <span className="rounded-full bg-white/10 px-2.5 py-0.5 font-mono text-[10px] text-white/60">
-            {lyricBlocks.length} segments • {(audioDuration || 0).toFixed(1)}s
+            {lyricBlocks.length} segments • {safeDuration.toFixed(1)}s
           </span>
         </div>
 
@@ -165,7 +145,7 @@ export function Timeline() {
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => setCurrentTime(0)}
+              onClick={() => audioEngine.seek(0)}
               className="p-1 rounded-md text-white/60 hover:text-white hover:bg-white/10"
               title="Jump to start"
             >
@@ -173,7 +153,7 @@ export function Timeline() {
             </button>
             <button
               type="button"
-              onClick={() => setIsPlaying(!isPlaying)}
+              onClick={() => audioEngine.toggle()}
               className="p-1.5 rounded-full bg-white text-black hover:scale-105 transition"
               title={isPlaying ? "Pause" : "Play"}
             >
@@ -181,7 +161,7 @@ export function Timeline() {
             </button>
             <button
               type="button"
-              onClick={() => setCurrentTime(safeDuration)}
+              onClick={() => audioEngine.seek(safeDuration)}
               className="p-1 rounded-md text-white/60 hover:text-white hover:bg-white/10"
               title="Jump to end"
             >
@@ -279,10 +259,11 @@ export function Timeline() {
 
             {/* 2. Track 📝 LYRICS */}
             <div className="relative h-10 w-full border-b border-white/10 bg-black/20">
-              {sortedBlocks.map((block, idx) => {
+              {sortedBlocks.map((block) => {
                 const left = block.startTime * pixelsPerSecond;
                 const width = Math.max(32, (block.endTime - block.startTime) * pixelsPerSecond);
                 const isSelected = selectedBlockId === block.id;
+                const isLowConfidence = block.confidence !== undefined && block.confidence < 0.65;
 
                 return (
                   <div
@@ -293,6 +274,8 @@ export function Timeline() {
                       "absolute top-1 bottom-1 flex cursor-grab items-center rounded-md border px-2 text-[10.5px] font-medium leading-none transition shadow-sm active:cursor-grabbing",
                       isSelected
                         ? "border-purple-400 bg-purple-600/80 text-white ring-2 ring-purple-400/60 z-20"
+                        : isLowConfidence
+                        ? "border-amber-500/70 bg-amber-500/20 text-amber-100"
                         : "border-purple-500/40 bg-gradient-to-r from-purple-900/60 to-indigo-900/40 text-purple-100 hover:border-purple-400/70"
                     )}
                   >

@@ -211,6 +211,11 @@ export const useLyricStore = create<ProjectState & Actions>()(
         if (prevUrl && prevUrl.startsWith("blob:") && prevUrl !== url) {
           try { URL.revokeObjectURL(prevUrl); } catch {}
         }
+        if (file) {
+          import("@/lib/audioEngine").then(({ audioEngine }) => {
+            audioEngine.load(file).catch(() => {});
+          });
+        }
         set({
           audioFile: file,
           audioUrl: url,
