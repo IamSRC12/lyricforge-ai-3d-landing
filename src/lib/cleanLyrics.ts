@@ -30,6 +30,11 @@ export const MULTI_LANG_STRUCTURAL_KEYWORDS: string[] = [
   // Turkish / Central Asian / Azerbaijani
   "nakarat", "köprü", "kopru", "giriş", "giris", "çıkış", "cikis",
   "kuplet", "kuple", "band", "kiriş", "kiris", "chiqish", "nakorat", "tashqi", "boshlanishi", "tugashi",
+  "naqarot", "naqorot", "naqorat", "naqoroat",
+
+  // Metadata / Script tags
+  "optional cyrillic", "optional latin", "optional", "cyrillic", "latin", "translation", "transcription",
+  "metadata", "credits", "romaji", "pinyin", "kanji", "hangul", "english", "uzbek",
 
   // Russian / Ukrainian / Belarussian
   "куплет", "припев", "бридж", "интро", "аутро", "вступление", "концовка", "соло",
@@ -76,7 +81,7 @@ function isStructuralHeader(text: string): boolean {
   }
 
   // Regex pattern matching
-  const pattern = /^(intro|verse|verso|couplet|strophe|куплет|chorus|coro|refrain|припев|サビ|副歌|主歌|bridge|ponte|puente|бридж|hook|outro|interlude|solo|part|section|aメロ|bメロ|cメロ|kuplet|kuple|band|kiriş|kiris|chiqish|nakorat|tashqi|boshlanishi|tugashi|заспів|приспів|вступ|кінець)\s*[:\-–—]?\s*\d*[a-c]?$/i;
+  const pattern = /^(intro|verse|verso|couplet|strophe|куплет|chorus|coro|refrain|припев|サビ|副歌|主歌|bridge|ponte|puente|бридж|hook|outro|interlude|solo|part|section|aメロ|bメロ|cメロ|kuplet|kuple|band|kiriş|kiris|chiqish|nakorat|tashqi|boshlanishi|tugashi|naqarot|naqorot|naqorat|заспів|приспів|вступ|кінець)\s*[:\-–—]?\s*\d*[a-c]?$/i;
   return pattern.test(normalized);
 }
 
@@ -114,8 +119,8 @@ export function cleanLyricsText(raw: string): { cleaned: string; removedTags: st
       continue;
     }
 
-    // Check if whole line is an enclosed tag like [Intro], (Verse 1), 【Chorus】
-    const bracketMatch = line.match(/^[[({【〔]\s*([^\])}】〕]{1,60})\s*[\])}】〕]$/);
+    // Check if whole line is an enclosed tag like [Intro], (Verse 1), 【Chorus】 (allowing trailing colons outside brackets)
+    const bracketMatch = line.match(/^[[({【〔]\s*([^\])}】〕]{1,60})\s*[\])}】〕][: \-–—]*$/);
     if (bracketMatch) {
       const inner = bracketMatch[1].trim();
       if (isStructuralHeader(inner) || /^(repeat|\d+x|x\d+)/i.test(inner)) {
