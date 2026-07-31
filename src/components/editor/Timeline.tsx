@@ -41,10 +41,13 @@ export function Timeline() {
   const waveformData = audioWaveform.length > 0 ? audioWaveform : fallbackWaveform;
 
   useEffect(() => {
-    return audioEngine.subscribe((t, playing) => {
+    const unsub = audioEngine.subscribe((t, playing) => {
       setIsPlaying(playing);
       setCurrentTime(t);
     });
+    return () => {
+      unsub();
+    };
   }, [setCurrentTime]);
 
   const onPointerDownBlock = (e: React.PointerEvent, block: LyricBlock, mode: "move" | "left" | "right") => {

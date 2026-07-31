@@ -54,10 +54,13 @@ export function VideoPreview() {
 
   useEffect(() => {
     let last = 0;
-    return audioEngine.subscribe((t, isPlaying) => {
+    const unsub = audioEngine.subscribe((t, isPlaying) => {
       setPlaying(isPlaying);
       if (t - last > 0.03 || !isPlaying) { last = t; setUiTime(t); setCurrentTime(t); }
     });
+    return () => {
+      unsub();
+    };
   }, [setCurrentTime]);
 
   useEffect(() => {
