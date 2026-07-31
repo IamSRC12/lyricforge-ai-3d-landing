@@ -99,8 +99,17 @@ export function computeSegmentBounds(
   // Base pass: clamp, de-overlap, enforce a minimum length.
   const base: SegmentBound[] = lines.map((block, i) => {
     const next = lines[i + 1];
-    let start = clamp(block.startTime, 0, total);
-    let end = clamp(block.endTime, start + MIN_SEGMENT_SECONDS, total || block.endTime);
+    let start = block.startTime;
+    let end = block.endTime;
+
+    if (block.words && block.words.length > 0) {
+      // Use the tightest word boundary times (with 20ms pre-roll and 40ms post-roll padding by default)
+      start = Math.max(0, block.words[0].start - 0.02);
+      end = Math.max(start + MIN_SEGMENT_SECONDS, block.words[block.words.length - 1].end + 0.04);
+    }
+
+    start = clamp(start, 0, total);
+    end = clamp(end, start + MIN_SEGMENT_SECONDS, total || end);
     if (next && end > next.startTime) end = Math.max(start + MIN_SEGMENT_SECONDS, next.startTime);
     return {
       blockId: block.id,
