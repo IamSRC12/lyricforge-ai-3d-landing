@@ -67,6 +67,7 @@ export type LyricBlock = {
   style: LyricBlockStyle;
   animation: LyricAnimation;
   emotion?: string;
+  confidence?: number;
 };
 
 export type BackgroundAssetType = "video" | "image" | "gradient" | "particles" | "solid";
