@@ -16,6 +16,10 @@ import {
 
 const TOOLS = [Type, Sparkles, ImageIcon, Music, Layers, Settings2];
 
+const WAVEFORM_BARS = Array.from({ length: 140 }, (_, index) =>
+  `${(18 + Math.abs(Math.sin(index * 0.5)) * 60 + (index % 7) * 3).toFixed(4)}%`
+);
+
 const SEGMENTS = [
   { text: "We were younger than the streetlights", left: 2, width: 20, low: false },
   { text: "Counting stars we couldn't see", left: 23.5, width: 17, low: false },
@@ -176,12 +180,10 @@ export default function EditorShowcase() {
 
               <TrackRow label="🎵 audio">
                 <div className="flex h-full items-center gap-[2px] px-1">
-                  {Array.from({ length: 140 }).map((_, index) => (
+                  {WAVEFORM_BARS.map((height, index) => (
                     <span
                       key={index}
-                      style={{
-                        height: `${18 + Math.abs(Math.sin(index * 0.5)) * 60 + (index % 7) * 3}%`,
-                      }}
+                      style={{ height }}
                       className="w-full rounded-[1px] bg-gradient-to-t from-forge-secondary/40 to-forge-accent/70"
                     />
                   ))}
